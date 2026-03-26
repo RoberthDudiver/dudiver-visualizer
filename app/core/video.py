@@ -264,18 +264,32 @@ class VideoGenerator:
         cfg = self.cfg
         audio_path = cfg["audio_path"]
         output = cfg["output_path"]
-        timing = cfg["timing"]
 
         try:
             self.on_progress("Preparando Manim...", 5)
             self.on_log("Modo: Kinetic Typography")
             self.on_log(f"Estilo: {cfg['estilo_kinetic']}")
 
-            # Guardar timestamps temporal para Manim
             import json
-            ts_temp = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
-            with open(ts_temp, "w", encoding="utf-8") as f:
-                json.dump(timing, f, ensure_ascii=False)
+
+            # Buscar timestamps Whisper con palabras individuales
+            whisper_ts = os.path.splitext(audio_path)[0] + "_timestamps.json"
+            ts_temp = None
+
+            if os.path.isfile(whisper_ts):
+                # Verificar que tenga palabras individuales
+                with open(whisper_ts, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and "palabras" in data and data["palabras"]:
+                    ts_temp = whisper_ts
+                    self.on_log(f"  {len(data['palabras'])} palabras individuales")
+
+            # Fallback: guardar timing de líneas en temp
+            if not ts_temp:
+                ts_temp = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
+                with open(ts_temp, "w", encoding="utf-8") as f:
+                    json.dump(cfg["timing"], f, ensure_ascii=False)
+                self.on_log("  Usando timestamps de líneas (sin palabras individuales)")
 
             # Importar render_kinetic
             from lyric_video_manim import render_kinetic
@@ -304,8 +318,8 @@ class VideoGenerator:
 
             result = render_kinetic(args)
 
-            # Limpiar temp
-            if os.path.exists(ts_temp):
+            # Limpiar temp (no borrar el Whisper original)
+            if ts_temp != whisper_ts and os.path.exists(ts_temp):
                 os.remove(ts_temp)
 
             if result:

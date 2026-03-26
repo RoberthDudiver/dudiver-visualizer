@@ -5,6 +5,7 @@ import customtkinter as ctk
 from tkinter import filedialog
 
 from app.config import ACCENT, ACCENT_H, GOLD, DIM, CARD, INPUT_BG
+from app.i18n import t
 
 
 def short_path(p, mx=35):
@@ -35,8 +36,8 @@ def create_file_row(parent, label, var, ftypes, all_inputs):
     name_lbl.pack(side="left", fill="x", expand=True, padx=6)
 
     def pick():
-        p = filedialog.askopenfilename(title=f"Seleccionar {label}",
-                                       filetypes=ftypes + [("Todos", "*.*")])
+        p = filedialog.askopenfilename(title=t("files.select", label=label),
+                                       filetypes=ftypes + [(t("files.all"), "*.*")])
         if p:
             var.set(p)
 

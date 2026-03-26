@@ -5,6 +5,7 @@ import customtkinter as ctk
 from tkinter import filedialog
 
 from app.config import ACCENT, ACCENT_H, GOLD, DIM, CARD, INPUT_BG
+from app.i18n import t
 from app.ui.components import create_section, short_path
 
 
@@ -17,11 +18,11 @@ class SpotPanel(ctk.CTkFrame):
         self._spot_type = spot_type
         self._spot_file = spot_file
 
-        create_section(self, "\U0001f4e2  SPOT PUBLICITARIO")
+        create_section(self, t("spot.title"))
         spot = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
         spot.pack(fill="x", padx=4, pady=(0, 4))
 
-        spot_enable = ctk.CTkSwitch(spot, text="Activar spot al final",
+        spot_enable = ctk.CTkSwitch(spot, text=t("spot.enable"),
                                     variable=spot_enabled,
                                     font=("Segoe UI Semibold", 11),
                                     fg_color=DIM, progress_color=ACCENT,
@@ -35,7 +36,7 @@ class SpotPanel(ctk.CTkFrame):
         # Tipo de spot
         sf1 = ctk.CTkFrame(self.spot_frame, fg_color="transparent")
         sf1.pack(fill="x", pady=2)
-        ctk.CTkLabel(sf1, text="Tipo:", font=("Segoe UI", 10),
+        ctk.CTkLabel(sf1, text=t("spot.type"), font=("Segoe UI", 10),
                      text_color=DIM, width=60).pack(side="left")
         self.spot_type_menu = ctk.CTkSegmentedButton(
             sf1, values=["Texto", "Imagen", "Video"],
@@ -48,7 +49,7 @@ class SpotPanel(ctk.CTkFrame):
         # Texto spot
         self.spot_text_frame = ctk.CTkFrame(self.spot_frame, fg_color="transparent")
         self.spot_text_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(self.spot_text_frame, text="Linea 1:", font=("Segoe UI", 10),
+        ctk.CTkLabel(self.spot_text_frame, text=t("spot.line1"), font=("Segoe UI", 10),
                      text_color=DIM, width=60).pack(side="left")
         ctk.CTkEntry(self.spot_text_frame, textvariable=spot_text,
                      font=("Segoe UI", 11), fg_color=INPUT_BG,
@@ -56,7 +57,7 @@ class SpotPanel(ctk.CTkFrame):
 
         sf_sub = ctk.CTkFrame(self.spot_frame, fg_color="transparent")
         sf_sub.pack(fill="x", pady=2)
-        ctk.CTkLabel(sf_sub, text="Linea 2:", font=("Segoe UI", 10),
+        ctk.CTkLabel(sf_sub, text=t("spot.line2"), font=("Segoe UI", 10),
                      text_color=DIM, width=60).pack(side="left")
         ctk.CTkEntry(sf_sub, textvariable=spot_subtext,
                      font=("Segoe UI", 11), fg_color=INPUT_BG,
@@ -68,9 +69,9 @@ class SpotPanel(ctk.CTkFrame):
 
         sf_file = ctk.CTkFrame(self.spot_file_frame, fg_color="transparent")
         sf_file.pack(fill="x", pady=2)
-        ctk.CTkLabel(sf_file, text="Archivo:", font=("Segoe UI", 10),
+        ctk.CTkLabel(sf_file, text=t("spot.file"), font=("Segoe UI", 10),
                      text_color=DIM, width=60).pack(side="left")
-        self.spot_file_label = ctk.CTkLabel(sf_file, text="ninguno",
+        self.spot_file_label = ctk.CTkLabel(sf_file, text=t("spot.none"),
                                             font=("Segoe UI", 10), text_color=GOLD)
         self.spot_file_label.pack(side="left", fill="x", expand=True, padx=4)
         ctk.CTkButton(sf_file, text="...", width=32, height=28,
@@ -80,7 +81,7 @@ class SpotPanel(ctk.CTkFrame):
         # Duracion spot
         sf_dur = ctk.CTkFrame(self.spot_frame, fg_color="transparent")
         sf_dur.pack(fill="x", pady=2)
-        ctk.CTkLabel(sf_dur, text="Duracion:", font=("Segoe UI", 10),
+        ctk.CTkLabel(sf_dur, text=t("spot.duration"), font=("Segoe UI", 10),
                      text_color=DIM, width=60).pack(side="left")
         ctk.CTkSegmentedButton(sf_dur, values=["3 seg", "5 seg", "8 seg", "10 seg"],
                                variable=spot_duration, font=("Segoe UI", 10),
@@ -107,10 +108,10 @@ class SpotPanel(ctk.CTkFrame):
 
     def _pick_spot_file(self):
         if self._spot_type.get() == "Imagen":
-            ft = [("Imagenes", "*.jpg *.png *.bmp"), ("Todos", "*.*")]
+            ft = [(t("spot.images"), "*.jpg *.png *.bmp"), (t("spot.all"), "*.*")]
         else:
-            ft = [("Video", "*.mp4 *.mov *.avi"), ("Todos", "*.*")]
-        p = filedialog.askopenfilename(title="Seleccionar archivo spot", filetypes=ft)
+            ft = [("Video", "*.mp4 *.mov *.avi"), (t("spot.all"), "*.*")]
+        p = filedialog.askopenfilename(title=t("spot.select_file"), filetypes=ft)
         if p:
             self._spot_file.set(p)
             self.spot_file_label.configure(text=short_path(p))

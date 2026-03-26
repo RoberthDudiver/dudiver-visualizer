@@ -7,12 +7,13 @@ import customtkinter as ctk
 from PIL import Image, ImageTk, ImageDraw, ImageFilter
 
 from app.config import ACCENT, ACCENT_H, DARK, DIM, GOLD
+from app.i18n import t
 
 
 class AboutWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
-        self.title("About — Dudiver Visualizer")
+        self.title(t("about.title"))
         self.configure(fg_color="#080810")
         self.resizable(False, False)
         # Evitar que minimice la ventana principal
@@ -77,7 +78,7 @@ class AboutWindow(ctk.CTkToplevel):
 
         ctk.CTkLabel(main, text="Dudiver", font=("Segoe UI Black", 16),
                      text_color=GOLD).pack()
-        ctk.CTkLabel(main, text="Venezuelan · No defined genre",
+        ctk.CTkLabel(main, text=t("about.bio"),
                      font=("Segoe UI", 10), text_color=DIM).pack(pady=(0, 8))
 
         # Redes — compactas
@@ -103,7 +104,7 @@ class AboutWindow(ctk.CTkToplevel):
         # Footer
         ctk.CTkFrame(main, fg_color="#1a1a2e", height=1, width=240,
                      corner_radius=0).pack(pady=(8, 4))
-        ctk.CTkLabel(main, text="Hecho con ♥ desde Venezuela",
+        ctk.CTkLabel(main, text=t("about.footer"),
                      font=("Segoe UI", 9), text_color="#3a3a5a").pack()
 
         # Animar partículas

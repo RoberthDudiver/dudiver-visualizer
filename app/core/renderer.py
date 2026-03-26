@@ -1,5 +1,6 @@
 """Render de un frame de preview — wraps lyric_video calls."""
 
+import os
 import random
 import numpy as np
 from PIL import Image, ImageTk
@@ -30,8 +31,8 @@ def render_preview_frame(*, ancho, alto, timing, t, dur, titulo,
 
     # Background
     bg_image = None
-    if fondo_path and __import__("os").path.isfile(fondo_path):
-        ext = __import__("os").path.splitext(fondo_path)[1].lower()
+    if fondo_path and os.path.isfile(fondo_path):
+        ext = os.path.splitext(fondo_path)[1].lower()
         if ext in (".jpg", ".jpeg", ".png", ".bmp"):
             bg_image = Image.open(fondo_path).resize((ancho, alto), Image.Resampling.LANCZOS)
 
