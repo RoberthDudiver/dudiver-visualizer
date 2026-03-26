@@ -1,0 +1,254 @@
+"""VideoGenerator — genera el video completo con callbacks para UI."""
+
+import os
+import random
+import subprocess
+import shutil
+import tempfile
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+from app.config import (
+    crear_frame_normal,
+    crear_frame_alpha,
+    Particula,
+)
+from app.core.audio import analyze_beats
+from app.core.spot import create_spot_frame
+
+
+class VideoGenerator:
+    """
+    Genera un video de lyrics. Recibe un dict de config + callbacks.
+
+    config keys:
+        audio_path, ancho, alto, fps, titulo, alpha_mode, esquema,
+        fondo_path, output_path, max_dur, timing, lines,
+        fuente, fuente_titulo, fuente_peq,
+        spot_on, spot_type, spot_text, spot_subtext, spot_file, spot_secs
+
+    callbacks:
+        on_progress(msg, pct)   — actualizar barra de progreso
+        on_log(msg)             — escribir al log
+        is_cancelled()          — retorna True si el usuario cancelo
+    """
+
+    def __init__(self, config, on_progress, on_log, is_cancelled):
+        self.cfg = config
+        self.on_progress = on_progress
+        self.on_log = on_log
+        self.is_cancelled = is_cancelled
+
+    def run(self):
+        """Ejecuta la generacion completa. Llamar desde un thread."""
+        cfg = self.cfg
+        audio_path = cfg["audio_path"]
+        ancho = cfg["ancho"]
+        alto = cfg["alto"]
+        fps = cfg["fps"]
+        titulo = cfg["titulo"]
+        alpha_mode = cfg["alpha_mode"]
+        esquema = cfg["esquema"]
+        fondo = cfg["fondo_path"]
+        output = cfg["output_path"]
+        max_dur = cfg["max_dur"]
+        timing = cfg["timing"]
+        lines = cfg["lines"]
+        fuente = cfg["fuente"]
+        fuente_titulo = cfg["fuente_titulo"]
+        fuente_peq = cfg["fuente_peq"]
+        spot_on = cfg["spot_on"]
+        spot_type = cfg["spot_type"]
+        spot_text = cfg["spot_text"]
+        spot_subtext = cfg["spot_subtext"]
+        spot_file = cfg["spot_file"]
+        spot_secs = cfg["spot_secs"]
+
+        from moviepy import AudioFileClip, VideoClip, VideoFileClip
+
+        self.on_progress("Cargando audio...", 2)
+        self.on_log(f"Audio: {os.path.basename(audio_path)}")
+        audio_clip = AudioFileClip(audio_path)
+        duracion = audio_clip.duration
+
+        if max_dur > 0 and duracion > max_dur:
+            duracion = max_dur
+            self.on_log(f"Duracion limitada a {max_dur}s")
+
+        total_dur = duracion + (spot_secs if spot_on else 0)
+
+        # Beats
+        self.on_progress("Analizando beats...", 12)
+        beat_times, rms, rms_times = analyze_beats(audio_path)
+
+        # Background
+        bg_image = None
+        bg_video = None
+        bg_is_video = False
+        if not alpha_mode and fondo and os.path.isfile(fondo):
+            ext = os.path.splitext(fondo)[1].lower()
+            if ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+                bg_video = VideoFileClip(fondo)
+                if bg_video.size != [ancho, alto]:
+                    bg_video = bg_video.resized((ancho, alto))
+                bg_is_video = True
+            elif ext in (".jpg", ".jpeg", ".png", ".bmp"):
+                bg_image = Image.open(fondo).resize((ancho, alto), Image.Resampling.LANCZOS)
+
+        random.seed(42)
+        parts = [Particula(ancho, alto) for _ in range(60)]
+        total_frames = int(total_dur * fps)
+        song_frames = int(duracion * fps)
+        self.on_log(f"\U0001f4d0 {ancho}x{alto} @ {fps}fps \u2014 {total_frames} frames")
+        if spot_on:
+            self.on_log(f"\U0001f4e2 Spot: {spot_type} \u2014 {spot_secs}s al final")
+
+        try:
+            if alpha_mode:
+                self._render_alpha(
+                    audio_path, audio_clip, ancho, alto, fps, duracion, total_dur,
+                    total_frames, timing, beat_times, fuente, fuente_titulo, titulo,
+                    output, spot_on, spot_type, spot_text, spot_subtext, spot_file, spot_secs)
+            else:
+                self._render_normal(
+                    audio_clip, ancho, alto, fps, duracion, total_dur,
+                    timing, beat_times, rms, rms_times, esquema, fuente,
+                    fuente_titulo, fuente_peq, parts, titulo, bg_image,
+                    bg_video, bg_is_video, output, spot_on, spot_type,
+                    spot_text, spot_subtext, spot_file, spot_secs)
+
+            if bg_video:
+                bg_video.close()
+            audio_clip.close()
+
+        except Exception as ex:
+            import traceback
+            self.on_log(f"\u2715 ERROR: {ex}")
+            self.on_log(traceback.format_exc())
+            self.on_progress(f"\u2715 Error: {ex}", 0)
+            try:
+                audio_clip.close()
+            except Exception:
+                pass
+
+    def _render_alpha(self, audio_path, audio_clip, ancho, alto, fps,
+                      duracion, total_dur, total_frames, timing, beat_times,
+                      fuente, fuente_titulo, titulo, output,
+                      spot_on, spot_type, spot_text, spot_subtext, spot_file, spot_secs):
+        """Render en modo alpha (WebM + preview MP4)."""
+        self.on_progress("Generando video...", 15)
+        temp_dir = tempfile.mkdtemp(prefix="dvs_")
+
+        for fn in range(total_frames):
+            if self.is_cancelled():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                self.on_progress("\u2715 Cancelado", 0)
+                return
+            t = fn / fps
+            if t < duracion:
+                frame = crear_frame_alpha(ancho, alto, timing, t, duracion,
+                                          beat_times, fuente, fuente_titulo, titulo)
+                if spot_on and (duracion - t) < 2.0:
+                    fade = (duracion - t) / 2.0
+                    arr = np.array(frame)
+                    arr[:, :, 3] = (arr[:, :, 3] * fade).astype(np.uint8)
+                    frame = Image.fromarray(arr)
+            else:
+                frame = Image.new("RGBA", (ancho, alto), (0, 0, 0, 255))
+                spot_f = create_spot_frame(ancho, alto, t - duracion,
+                                           spot_type, spot_text, spot_subtext, spot_file)
+                frame.paste(spot_f)
+
+            frame.save(os.path.join(temp_dir, f"f_{fn:06d}.png"), "PNG")
+            if fn % (fps * 2) == 0:
+                pct = 15 + (fn / total_frames) * 70
+                self.on_progress(f"Frame {fn}/{total_frames}", pct)
+
+        self.on_progress("Codificando...", 88)
+        ff = shutil.which("ffmpeg") or "ffmpeg"
+        winff = os.path.expanduser("~/AppData/Local/Microsoft/WinGet/Links/ffmpeg.exe")
+        if os.path.exists(winff):
+            ff = winff
+
+        webm = output if output.endswith(".webm") else os.path.splitext(output)[0] + ".webm"
+        subprocess.run([ff, "-y", "-framerate", str(fps),
+                        "-i", os.path.join(temp_dir, "f_%06d.png"),
+                        "-i", audio_path, "-t", str(total_dur),
+                        "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
+                        "-b:v", "4M", "-c:a", "libopus", "-b:a", "128k",
+                        "-shortest", "-auto-alt-ref", "0", webm],
+                       capture_output=True)
+
+        mp4 = os.path.splitext(output)[0] + "_preview.mp4"
+        subprocess.run([ff, "-y", "-framerate", str(fps),
+                        "-i", os.path.join(temp_dir, "f_%06d.png"),
+                        "-i", audio_path, "-t", str(total_dur),
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-b:v", "5M", "-c:a", "aac", "-b:a", "192k",
+                        "-shortest", "-movflags", "+faststart", mp4],
+                       capture_output=True)
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        self.on_log(f"\u2713 {os.path.basename(webm)}")
+        self.on_log(f"\u2713 {os.path.basename(mp4)}")
+        self.on_progress("\u2713 Completado!", 100)
+
+    def _render_normal(self, audio_clip, ancho, alto, fps, duracion, total_dur,
+                       timing, beat_times, rms, rms_times, esquema, fuente,
+                       fuente_titulo, fuente_peq, parts, titulo, bg_image,
+                       bg_video, bg_is_video, output, spot_on, spot_type,
+                       spot_text, spot_subtext, spot_file, spot_secs):
+        """Render en modo normal (MP4 con moviepy)."""
+        from moviepy import VideoClip
+
+        self.on_progress("Generando video...", 15)
+        count = [0]
+
+        def make_frame(t):
+            if self.is_cancelled():
+                raise KeyboardInterrupt
+
+            if t >= duracion and spot_on:
+                img = create_spot_frame(ancho, alto, t - duracion,
+                                        spot_type, spot_text, spot_subtext, spot_file)
+                return np.array(img)
+
+            cur_bg = bg_image
+            if bg_is_video and bg_video:
+                cur_bg = Image.fromarray(bg_video.get_frame(t % bg_video.duration))
+
+            img = crear_frame_normal(ancho, alto, timing, t, duracion,
+                                     beat_times, (rms, rms_times), esquema,
+                                     fuente, fuente_titulo, fuente_peq,
+                                     parts, titulo, cur_bg)
+
+            left = duracion - t
+            if spot_on and left < 2.0:
+                fa = int(255 * (1 - left / 2.0))
+                ov = Image.new("RGBA", (ancho, alto), (0, 0, 0, fa))
+                img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+            elif not spot_on and left < 3.0:
+                fa = int(255 * (1 - left / 3.0))
+                ov = Image.new("RGBA", (ancho, alto), (0, 0, 0, fa))
+                img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+
+            count[0] += 1
+            if count[0] % (fps * 2) == 0:
+                pct = 15 + (t / total_dur) * 80
+                self.on_progress(f"{t:.0f}s / {total_dur:.0f}s", pct)
+
+            return np.array(img)
+
+        try:
+            video = VideoClip(make_frame, duration=total_dur)
+            video = video.with_audio(audio_clip)
+            self.on_log(f"Escribiendo: {os.path.basename(output)}")
+            video.write_videofile(output, fps=fps, codec="libx264",
+                                  audio_codec="aac", bitrate="8000k",
+                                  preset="medium", logger=None)
+            video.close()
+            self.on_log(f"\u2713 {os.path.basename(output)}")
+            self.on_progress("\u2713 Completado!", 100)
+        except KeyboardInterrupt:
+            self.on_progress("\u2715 Cancelado", 0)
