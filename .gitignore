@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+installer/
+*.egg-info/
+.env
+*.wav
+*.mp3
+*.mid
+*.midi
+create_icon.py
+generar_*.py
+salsa_*
+reggaeton_*

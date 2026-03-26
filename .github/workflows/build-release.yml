@@ -1,0 +1,121 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install customtkinter pillow numpy moviepy librosa openai-whisper pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --icon="icon.ico" --name="DudiverVisualizer" --add-data="icon.ico;." visualizer_app.py
+        shell: cmd
+
+      - name: Create Inno Setup Script
+        run: |
+          @"
+          [Setup]
+          AppName=Dudiver Visualizer Studio
+          AppVersion=3.0
+          AppPublisher=Dudiver
+          AppPublisherURL=https://github.com/RoberthDudiver
+          DefaultDirName={autopf}\Dudiver Visualizer Studio
+          DefaultGroupName=Dudiver Visualizer Studio
+          OutputDir=installer
+          OutputBaseFilename=DudiverVisualizerSetup
+          SetupIconFile=icon.ico
+          Compression=lzma2
+          SolidCompression=yes
+          UninstallDisplayIcon={app}\DudiverVisualizer.exe
+          WizardStyle=modern
+          PrivilegesRequired=lowest
+
+          [Languages]
+          Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+          Name: "english"; MessagesFile: "compiler:Default.isl"
+
+          [Tasks]
+          Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+          [Files]
+          Source: "dist\DudiverVisualizer.exe"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+
+          [Icons]
+          Name: "{group}\Dudiver Visualizer Studio"; Filename: "{app}\DudiverVisualizer.exe"; IconFilename: "{app}\icon.ico"
+          Name: "{autodesktop}\Dudiver Visualizer Studio"; Filename: "{app}\DudiverVisualizer.exe"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
+
+          [Run]
+          Filename: "{app}\DudiverVisualizer.exe"; Description: "Abrir Dudiver Visualizer Studio"; Flags: nowait postinstall skipifsilent
+          "@ | Out-File -FilePath setup.iss -Encoding ASCII
+        shell: pwsh
+
+      - name: Build Installer
+        run: |
+          mkdir installer
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" setup.iss
+        shell: pwsh
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DudiverVisualizer-exe
+          path: dist/DudiverVisualizer.exe
+
+      - name: Upload Installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DudiverVisualizer-installer
+          path: installer/DudiverVisualizerSetup.exe
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Dudiver Visualizer Studio ${{ github.ref_name }}"
+          body: |
+            ## Dudiver Visualizer Studio ${{ github.ref_name }}
+
+            ### Descargar / Download
+            - **DudiverVisualizerSetup.exe** — Instalador para Windows / Windows Installer
+            - **DudiverVisualizer.exe** — Portable (sin instalar) / Portable (no install)
+
+            ### Requisitos / Requirements
+            - Windows 10/11
+            - FFmpeg instalado (para exportar video)
+
+            ### Como usar / How to use
+            1. Descarga e instala / Download and install
+            2. Abre la app / Open the app
+            3. Selecciona tu cancion y letra / Select your song and lyrics
+            4. Click en GENERAR VIDEO / Click GENERATE VIDEO
+
+            ---
+            **Recuerda**: Dale estrella al repo y sigue a @dudiver
+            **Remember**: Star the repo and follow @dudiver
+          files: |
+            dist/DudiverVisualizer.exe
+            installer/DudiverVisualizerSetup.exe
+          draft: false
+          prerelease: false
