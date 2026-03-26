@@ -25,17 +25,17 @@
 ---
 
 <p align="center">
-  <img src="docs/Captura de pantalla 2026-03-26 182016.png" width="720" alt="Main window — Karaoke mode with effects panel">
+  <img src="docs/Captura%20de%20pantalla%202026-03-26%20182016.png" width="720" alt="Main window — Karaoke mode with effects panel">
 </p>
 
 <p align="center">
-  <img src="docs/Captura de pantalla 2026-03-26 182228.png" width="720" alt="Kinetic Typography mode with live preview">
+  <img src="docs/Captura%20de%20pantalla%202026-03-26%20182228.png" width="720" alt="Kinetic Typography mode with live preview">
 </p>
 
 <table>
 <tr>
-<td><img src="docs/Captura de pantalla 2026-03-26 182257.png" width="420" alt="Sync Editor — Words tab with per-word timestamps"></td>
-<td><img src="docs/Captura de pantalla 2026-03-26 182341.png" width="420" alt="Sync Editor — Lines tab with full-line view"></td>
+<td><img src="docs/Captura%20de%20pantalla%202026-03-26%20182257.png" width="420" alt="Sync Editor — Words tab with per-word timestamps"></td>
+<td><img src="docs/Captura%20de%20pantalla%202026-03-26%20182341.png" width="420" alt="Sync Editor — Lines tab with full-line view"></td>
 </tr>
 <tr>
 <td align="center"><em>Sync Editor — Words</em></td>
@@ -44,7 +44,7 @@
 </table>
 
 <p align="center">
-  <a href="docs/Como tú me miras_visualizer.mp4">Watch a 30-second demo video</a>
+  <a href="docs/Como%20t%C3%BA%20me%20miras_visualizer.mp4">Watch a 30-second demo video</a>
 </p>
 
 ## The Problem
