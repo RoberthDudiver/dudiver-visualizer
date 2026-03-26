@@ -13,7 +13,7 @@ def get_audio_duration(audio_path):
 
 
 def analyze_beats(audio_path):
-    """Analiza beats y RMS del audio. Retorna (beat_times, rms, rms_times, y_audio, sr)."""
+    """Analiza beats y RMS del audio. Retorna (beat_times, rms, rms_times)."""
     import librosa
     import numpy as np
     y_audio, sr = librosa.load(audio_path, sr=22050)

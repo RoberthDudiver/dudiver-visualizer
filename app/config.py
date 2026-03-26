@@ -43,6 +43,15 @@ ESQUEMAS_GUI = {
     "Noche": "nocturno", "Fuego": "fuego", "Oceano": "oscuro",
     "Neon": "neon", "Oro": "elegante",
 }
+
+# Mapeo de nombre GUI → esquema kinetic (mismas keys que ESQUEMAS_GUI)
+ESQUEMA_GUI_TO_KINETIC = {
+    "Noche": "nocturno",
+    "Fuego": "fuego",
+    "Oceano": "oceano",
+    "Neon": "neon",
+    "Oro": "elegante",
+}
 DURACIONES = {
     "Completo": 0, "30 seg": 30, "1 min": 60, "1:30 min": 90,
     "2 min": 120, "3 min": 180,

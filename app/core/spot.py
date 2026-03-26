@@ -52,4 +52,19 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext, s
         alpha = min(1.0, t_spot / 1.5)
         img = Image.blend(img, spot_img, alpha)
 
+    elif spot_type == "Video" and spot_file and os.path.isfile(spot_file):
+        try:
+            from moviepy import VideoFileClip
+            clip = VideoFileClip(spot_file)
+            if clip.size != [ancho, alto]:
+                clip = clip.resized((ancho, alto))
+            t_video = min(t_spot, clip.duration - 0.1)
+            frame = clip.get_frame(max(0, t_video))
+            spot_img = Image.fromarray(frame)
+            alpha = min(1.0, t_spot / 1.5)
+            img = Image.blend(img, spot_img, alpha)
+            clip.close()
+        except Exception:
+            pass
+
     return img

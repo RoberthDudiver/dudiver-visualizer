@@ -15,7 +15,7 @@ from PIL import Image, ImageTk
 from app.config import (
     ACCENT, DARK, GREEN, DIM, CARD, INPUT_BG,
     TAMANOS, ESQUEMAS_GUI, DURACIONES, ESQUEMAS,
-    ESTILOS_KINETIC, ESQUEMAS_KINETIC_GUI,
+    ESTILOS_KINETIC, ESQUEMA_GUI_TO_KINETIC,
     whisper_generar_timestamps,
     alinear_letra_con_whisper,
 )
@@ -31,6 +31,13 @@ from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.components import short_path
 from app.ui.about import AboutWindow
 from app.ui.settings import SettingsWindow
+from app.ui.sync_editor import SyncEditorWindow
+from app.ui.help_window import HelpWindow
+from app.i18n import t
+from app.core.project import (
+    save_project, load_project, find_project,
+    get_project_config, apply_project,
+)
 
 
 class VisualizerApp(ctk.CTk):
@@ -121,6 +128,10 @@ class VisualizerApp(ctk.CTk):
                                on_open_folder=self._open_folder,
                                on_settings=self._open_settings,
                                on_about=self._open_about,
+                               on_sync_editor=self._open_sync_editor,
+                               on_help=self._open_help,
+                               on_save_project=self._save_project,
+                               on_open_project=self._open_project,
                                all_inputs=self._all_inputs)
         self.toolbar.pack(fill="x")
 
@@ -190,8 +201,14 @@ class VisualizerApp(ctk.CTk):
                                           on_time_change=self._on_time_change)
         self.preview_panel.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
 
-        # Watchers
+        # Watchers — auto-preview al cambiar configuración
         self.audio_path.trace_add("write", self._on_audio_change)
+        self.modo_var.trace_add("write", self._auto_preview)
+        self.fuente_var.trace_add("write", self._auto_preview)
+        self.estilo_kinetic_var.trace_add("write", self._auto_preview)
+        self.esquema_var.trace_add("write", self._auto_preview)
+        self.font_size_var.trace_add("write", self._auto_preview)
+        self._preview_pending = None
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -309,7 +326,7 @@ class VisualizerApp(ctk.CTk):
     def _run_timestamps(self):
         audio = self.audio_path.get()
         if not audio or not os.path.isfile(audio):
-            messagebox.showwarning("Aviso", "Selecciona un audio primero.")
+            messagebox.showwarning(t("app.warn"), t("app.select_audio"))
             return
         if self._worker and self._worker.is_alive():
             return
@@ -339,10 +356,64 @@ class VisualizerApp(ctk.CTk):
     #  PREVIEW
     # ══════════════════════════════════════════════════════════════════════════
 
+    def _auto_preview(self, *_):
+        """Dispara preview automático con debounce de 300ms."""
+        if self._preview_pending:
+            self.after_cancel(self._preview_pending)
+        self._preview_pending = self.after(300, self._do_auto_preview)
+
+    def _do_auto_preview(self):
+        """Ejecuta preview si hay letra disponible."""
+        self._preview_pending = None
+        lines = self._lyrics()
+        if not lines:
+            return
+        # Mostrar "Cargando..." y generar en thread
+        self._show_loading()
+        threading.Thread(target=self._preview_thread, daemon=True).start()
+
+    def _show_loading(self):
+        """Muestra indicador de carga en el canvas."""
+        canvas = self.preview_panel.preview_canvas
+        canvas.delete("all")
+        cw = max(canvas.winfo_width(), 200)
+        ch = max(canvas.winfo_height(), 200)
+        canvas.create_text(cw // 2, ch // 2, text="Generando preview...",
+                           fill="#7a7a9a", font=("Segoe UI", 12))
+
+    def _preview_thread(self):
+        """Genera preview en background thread."""
+        try:
+            lines = self._lyrics()
+            if not lines:
+                return
+            modo = self.modo_var.get()
+            ancho, alto = self._resolution()
+            t = self.preview_time.get()
+            titulo = self.titulo_var.get().strip()
+
+            if modo == "Kinetic Typography":
+                img = self._preview_kinetic(ancho, alto, lines, t, titulo)
+            else:
+                fuente, fuente_titulo, fuente_peq = adapted_fonts(
+                    self.font_size_var.get(), ancho, alto, lines)
+                timing = self._ensure_timing(lines) or fallback_timing(lines, self._dur or 180)
+                img = render_preview_frame(
+                    ancho=ancho, alto=alto, timing=timing, t=t,
+                    dur=self._dur or 180, titulo=titulo,
+                    fuente=fuente, fuente_titulo=fuente_titulo, fuente_peq=fuente_peq,
+                    esquema_key=self.esquema_var.get(),
+                    alpha_mode=self.alpha_var.get(),
+                    fondo_path=self.fondo_path.get())
+
+            self.after(0, lambda: self._show_preview_image(img, ancho, alto))
+        except Exception:
+            pass
+
     def _preview_frame(self):
         lines = self._lyrics()
         if not lines:
-            messagebox.showinfo("Info", "Agrega la letra primero.")
+            messagebox.showinfo(t("app.info"), t("app.add_lyrics_first"))
             return
 
         modo = self.modo_var.get()
@@ -369,9 +440,7 @@ class VisualizerApp(ctk.CTk):
     def _preview_kinetic(self, ancho, alto, lines, t, titulo):
         """Genera preview estático simulando kinetic typography."""
         from PIL import ImageDraw, ImageFont
-        from app.config import ESQUEMAS_KINETIC_GUI
-
-        esquema_key = ESQUEMAS_KINETIC_GUI.get(self.esquema_var.get(), "neon")
+        esquema_key = ESQUEMA_GUI_TO_KINETIC.get(self.esquema_var.get(), "neon")
         from lyric_video_manim import ESQUEMAS_KINETIC
         esquema = ESQUEMAS_KINETIC.get(esquema_key, ESQUEMAS_KINETIC["neon"])
 
@@ -510,14 +579,31 @@ class VisualizerApp(ctk.CTk):
     def _run_generate(self):
         audio = self.audio_path.get()
         if not audio or not os.path.isfile(audio):
-            messagebox.showwarning("Aviso", "Selecciona un audio.")
+            messagebox.showwarning(t("app.warn"), t("app.select_audio_short"))
             return
         lines = self._lyrics()
         if not lines:
-            messagebox.showwarning("Aviso", "Agrega la letra.")
+            messagebox.showwarning(t("app.warn"), t("app.add_lyrics"))
             return
         if self._worker and self._worker.is_alive():
             return
+
+        # Preguntar dónde guardar
+        from tkinter import filedialog
+        default_name = self._output_path()
+        ext = ".webm" if self.alpha_var.get() else ".mp4"
+        ftypes = [("Video", f"*{ext}"), (t("files.all"), "*.*")]
+        output = filedialog.asksaveasfilename(
+            title=t("app.save_as"),
+            initialdir=os.path.dirname(default_name),
+            initialfile=os.path.basename(default_name),
+            defaultextension=ext,
+            filetypes=ftypes,
+        )
+        if not output:
+            return
+
+        self._custom_output = output
         self._cancel = False
         self._disable_ui()
         self._set_status("\u27f3 Preparando...", 1)
@@ -545,7 +631,7 @@ class VisualizerApp(ctk.CTk):
 
         # Resolver estilo kinetic
         estilo_k = ESTILOS_KINETIC.get(self.estilo_kinetic_var.get(), "wave")
-        esquema_k = ESQUEMAS_KINETIC_GUI.get(self.esquema_var.get(), "neon")
+        esquema_k = ESQUEMA_GUI_TO_KINETIC.get(self.esquema_var.get(), "neon")
 
         config = {
             "audio_path": self.audio_path.get(),
@@ -556,7 +642,7 @@ class VisualizerApp(ctk.CTk):
             "alpha_mode": self.alpha_var.get(),
             "esquema": self._esquema(),
             "fondo_path": self.fondo_path.get(),
-            "output_path": self._output_path(),
+            "output_path": getattr(self, '_custom_output', self._output_path()),
             "max_dur": self._max_duration(),
             "timing": timing,
             "lines": lines,
@@ -612,3 +698,57 @@ class VisualizerApp(ctk.CTk):
 
     def _open_about(self):
         AboutWindow(self)
+
+    def _open_sync_editor(self):
+        audio = self.audio_path.get()
+        if not audio or not os.path.isfile(audio):
+            messagebox.showwarning(t("app.warn"), t("app.select_audio"))
+            return
+        ts_path = get_ts_path(audio)
+        if not ts_path or not os.path.isfile(ts_path):
+            messagebox.showwarning(t("app.warn"), t("app.no_ts_run_whisper"))
+            return
+
+        def on_save(data):
+            # Recargar timestamps en la app
+            lines = self._lyrics()
+            self._lineas = load_existing(ts_path, lines)
+            self._auto_preview()
+
+        SyncEditorWindow(self, audio, ts_path, on_save=on_save)
+
+    def _open_help(self):
+        HelpWindow(self)
+
+    def _save_project(self):
+        from tkinter import filedialog
+        audio = self.audio_path.get()
+        initial = os.path.dirname(audio) if audio else os.path.expanduser("~/Desktop")
+        folder = filedialog.askdirectory(
+            title=t("project.select_folder"),
+            initialdir=initial,
+        )
+        if not folder:
+            return
+        config = get_project_config(self)
+        path = save_project(folder, config)
+        self._log(t("project.saved", path=path))
+        messagebox.showinfo(t("project.save"), t("project.saved", path=path))
+
+    def _open_project(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title=t("project.select_file"),
+            filetypes=[("Dudiver Project", "dudiver_project.json"),
+                       (t("files.all"), "*.*")],
+        )
+        if not path:
+            return
+        try:
+            config = load_project(path)
+            apply_project(self, config)
+            name = os.path.basename(os.path.dirname(path))
+            self._log(t("project.loaded", name=name))
+            self._auto_preview()
+        except Exception as ex:
+            messagebox.showerror("Error", str(ex))

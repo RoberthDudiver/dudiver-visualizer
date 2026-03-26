@@ -5,11 +5,14 @@ import customtkinter as ctk
 from PIL import Image
 
 from app.config import ACCENT, ACCENT_H, GOLD, GREEN, DIM, INPUT_BG, DARK
+from app.i18n import t
 
 
 class Toolbar(ctk.CTkFrame):
     def __init__(self, parent, *, on_timestamps, on_preview, on_generate,
                  on_cancel, on_open_folder, on_settings, on_about,
+                 on_sync_editor=None, on_help=None,
+                 on_save_project=None, on_open_project=None,
                  all_inputs):
         super().__init__(parent, fg_color=DARK, height=56, corner_radius=0)
         self.pack_propagate(False)
@@ -31,14 +34,23 @@ class Toolbar(ctk.CTkFrame):
                      corner_radius=0).pack(side="left", padx=12)
 
         # Toolbar buttons
-        ts_btn = ctk.CTkButton(self, text="\u27f3 Timestamps", height=34, width=130,
+        ts_btn = ctk.CTkButton(self, text=t("toolbar.timestamps"), height=34, width=130,
                                font=("Segoe UI Semibold", 11),
                                fg_color="#2a2a4a", hover_color="#3a3a5a",
                                corner_radius=8, command=on_timestamps)
         ts_btn.pack(side="left", padx=3)
         all_inputs.append(ts_btn)
 
-        pv_btn = ctk.CTkButton(self, text="\U0001f441 Preview", height=34, width=110,
+        if on_sync_editor:
+            sync_btn = ctk.CTkButton(self, text=t("toolbar.sync"), height=34, width=80,
+                                     font=("Segoe UI Semibold", 11),
+                                     fg_color="#2a2a4a", hover_color="#3a3a5a",
+                                     text_color="#ff9f43", corner_radius=8,
+                                     command=on_sync_editor)
+            sync_btn.pack(side="left", padx=3)
+            all_inputs.append(sync_btn)
+
+        pv_btn = ctk.CTkButton(self, text=t("toolbar.preview"), height=34, width=110,
                                font=("Segoe UI Semibold", 11),
                                fg_color="#2a2a4a", hover_color="#3a3a5a",
                                text_color=GOLD, corner_radius=8,
@@ -47,7 +59,7 @@ class Toolbar(ctk.CTkFrame):
         all_inputs.append(pv_btn)
 
         # GENERAR button
-        self.gen_btn = ctk.CTkButton(self, text="\u25b6  GENERAR VIDEO", height=38, width=200,
+        self.gen_btn = ctk.CTkButton(self, text=t("toolbar.generate"), height=38, width=200,
                                      font=("Segoe UI Black", 13),
                                      fg_color=ACCENT, hover_color=ACCENT_H,
                                      corner_radius=10, command=on_generate)
@@ -82,16 +94,21 @@ class Toolbar(ctk.CTkFrame):
         self.progress_bar.pack(fill="x", pady=(0, 1))
         self.progress_bar.set(0)
 
-        self.status_label = ctk.CTkLabel(prog_col, text="\u2713 Listo",
+        self.status_label = ctk.CTkLabel(prog_col, text=t("toolbar.ready"),
                                          font=("Segoe UI", 9), text_color=DIM,
                                          anchor="w", height=14)
         self.status_label.pack(fill="x")
 
         # Right side buttons
-        ctk.CTkButton(self, text="?", height=34, width=34,
+        if on_help:
+            ctk.CTkButton(self, text="?", height=34, width=34,
+                          font=("Segoe UI Bold", 13), fg_color="#2a2a4a",
+                          hover_color="#3a3a5a", text_color=GOLD, corner_radius=8,
+                          command=on_help).pack(side="right", padx=(3, 12))
+        ctk.CTkButton(self, text="i", height=34, width=34,
                       font=("Segoe UI Bold", 13), fg_color="#2a2a4a",
-                      hover_color="#3a3a5a", text_color=GOLD, corner_radius=8,
-                      command=on_about).pack(side="right", padx=(3, 12))
+                      hover_color="#3a3a5a", text_color=DIM, corner_radius=8,
+                      command=on_about).pack(side="right", padx=3)
         ctk.CTkButton(self, text="\u2699", height=34, width=34,
                       font=("Segoe UI", 16), fg_color="#2a2a4a",
                       hover_color="#3a3a5a", text_color=DIM, corner_radius=8,
@@ -100,6 +117,16 @@ class Toolbar(ctk.CTkFrame):
                       font=("Segoe UI", 14), fg_color="#2a2a4a",
                       hover_color="#3a3a5a", corner_radius=8,
                       command=on_open_folder).pack(side="right", padx=3)
+        if on_save_project:
+            ctk.CTkButton(self, text="\U0001f4be", height=34, width=40,
+                          font=("Segoe UI", 14), fg_color="#2a2a4a",
+                          hover_color="#3a3a5a", corner_radius=8,
+                          command=on_save_project).pack(side="right", padx=3)
+        if on_open_project:
+            ctk.CTkButton(self, text="\U0001f4c1", height=34, width=40,
+                          font=("Segoe UI", 14), fg_color="#2a2a4a",
+                          hover_color="#3a3a5a", corner_radius=8,
+                          command=on_open_project).pack(side="right", padx=3)
 
     def set_status(self, msg, pct=None):
         """Actualiza barra de progreso y status label."""
@@ -119,11 +146,11 @@ class Toolbar(ctk.CTkFrame):
     def set_generating(self):
         """Desactiva el boton generar, activa cancel."""
         self.cancel_btn.configure(state="normal", text_color=ACCENT)
-        self.gen_btn.configure(text="\u27f3  GENERANDO...", fg_color="#3a3a5a",
+        self.gen_btn.configure(text=t("toolbar.generating"), fg_color="#3a3a5a",
                               state="disabled")
 
     def set_idle(self):
         """Restaura boton generar, desactiva cancel."""
         self.cancel_btn.configure(state="disabled", text_color=DIM)
-        self.gen_btn.configure(text="\u25b6  GENERAR VIDEO", fg_color=ACCENT,
+        self.gen_btn.configure(text=t("toolbar.generate"), fg_color=ACCENT,
                               state="normal")

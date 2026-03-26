@@ -3,6 +3,7 @@
 import os
 import tkinter as tk
 from PIL import Image, ImageTk
+from app.i18n import t
 
 
 def show_splash(parent, image_path, seconds=3):
@@ -44,7 +45,7 @@ def show_splash(parent, image_path, seconds=3):
                        highlightthickness=0, bd=0, width=bar_w)
     canvas.pack(pady=(10, 0))
 
-    tk.Label(bar_frame, text="Cargando...", font=("Segoe UI", 8),
+    tk.Label(bar_frame, text=t("splash.loading"), font=("Segoe UI", 8),
              fg="#7a7a9a", bg="#0e0e1a").pack(pady=(4, 0))
 
     duration_ms = seconds * 1000

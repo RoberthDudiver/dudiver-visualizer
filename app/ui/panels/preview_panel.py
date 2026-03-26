@@ -4,6 +4,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 from app.config import ACCENT, ACCENT_H, GOLD, DIM, CARD, INPUT_BG, DARK
+from app.i18n import t
 from app.ui.components import create_section
 
 
@@ -11,7 +12,7 @@ class PreviewPanel(ctk.CTkFrame):
     def __init__(self, parent, *, preview_time, on_time_change):
         super().__init__(parent, fg_color=DARK, corner_radius=0)
 
-        create_section(self, "\U0001f5bc  PREVIEW")
+        create_section(self, t("preview.title"))
 
         # Preview frame con borde
         pv_outer = ctk.CTkFrame(self, fg_color="#080810", corner_radius=12,
@@ -41,7 +42,7 @@ class PreviewPanel(ctk.CTkFrame):
         self.timeline.pack(fill="x", pady=(2, 4))
 
         # Info bar
-        self.info_label = ctk.CTkLabel(self, text="Selecciona un audio para comenzar",
+        self.info_label = ctk.CTkLabel(self, text=t("preview.select_audio"),
                                        font=("Segoe UI", 10), text_color=DIM,
                                        fg_color=CARD, corner_radius=8, height=30)
         self.info_label.pack(fill="x", padx=4, pady=(0, 2))
