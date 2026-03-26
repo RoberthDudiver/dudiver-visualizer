@@ -47,3 +47,25 @@ DURACIONES = {
     "Completo": 0, "30 seg": 30, "1 min": 60, "1:30 min": 90,
     "2 min": 120, "3 min": 180,
 }
+
+# ── Modos de video ────────────────────────────────────────────────────────────
+MODOS_VIDEO = ["Karaoke", "Kinetic Typography"]
+
+ESTILOS_KINETIC = {
+    "Wave": "wave",
+    "Typewriter": "typewriter",
+    "Zoom Bounce": "zoom",
+    "Slide": "slide",
+    "Fade & Float": "fade",
+    "Glitch": "glitch",
+    "Bounce Drop": "bounce",
+    "Cinematic": "cinematic",
+}
+
+ESQUEMAS_KINETIC_GUI = {
+    "Neon": "neon",
+    "Fuego": "fuego",
+    "Nocturno": "nocturno",
+    "Elegante": "elegante",
+    "Oceano": "oceano",
+}

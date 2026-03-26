@@ -15,6 +15,7 @@ from PIL import Image, ImageTk
 from app.config import (
     ACCENT, DARK, GREEN, DIM, CARD, INPUT_BG,
     TAMANOS, ESQUEMAS_GUI, DURACIONES, ESQUEMAS,
+    ESTILOS_KINETIC, ESQUEMAS_KINETIC_GUI,
     whisper_generar_timestamps,
     alinear_letra_con_whisper,
 )
@@ -28,6 +29,8 @@ from app.ui.panels.config_panel import ConfigPanel
 from app.ui.panels.spot_panel import SpotPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.components import short_path
+from app.ui.about import AboutWindow
+from app.ui.settings import SettingsWindow
 
 
 class VisualizerApp(ctk.CTk):
@@ -35,7 +38,6 @@ class VisualizerApp(ctk.CTk):
         super().__init__()
         self.title("Dudiver Visualizer Studio")
         self.configure(fg_color=DARK)
-        self.state("zoomed")
 
         # Icono — forzar el nuestro, bloquear el default de customtkinter
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -82,6 +84,10 @@ class VisualizerApp(ctk.CTk):
         self.chk_vineta = ctk.BooleanVar(value=True)
         self.chk_glow = ctk.BooleanVar(value=True)
         self.chk_barra = ctk.BooleanVar(value=True)
+        # Modo
+        self.modo_var = ctk.StringVar(value="Karaoke")
+        self.estilo_kinetic_var = ctk.StringVar(value="Wave")
+        self.fuente_var = ctk.StringVar(value="Arial")
         # Spot
         self.spot_enabled = ctk.BooleanVar(value=False)
         self.spot_type = ctk.StringVar(value="Texto")
@@ -113,6 +119,8 @@ class VisualizerApp(ctk.CTk):
                                on_generate=self._run_generate,
                                on_cancel=self._do_cancel,
                                on_open_folder=self._open_folder,
+                               on_settings=self._open_settings,
+                               on_about=self._open_about,
                                all_inputs=self._all_inputs)
         self.toolbar.pack(fill="x")
 
@@ -147,6 +155,9 @@ class VisualizerApp(ctk.CTk):
                                         whisper_var=self.whisper_var,
                                         duracion_var=self.duracion_var,
                                         font_size_var=self.font_size_var,
+                                        modo_var=self.modo_var,
+                                        estilo_kinetic_var=self.estilo_kinetic_var,
+                                        fuente_var=self.fuente_var,
                                         chk_particulas=self.chk_particulas,
                                         chk_onda=self.chk_onda,
                                         chk_vineta=self.chk_vineta,
@@ -334,22 +345,152 @@ class VisualizerApp(ctk.CTk):
             messagebox.showinfo("Info", "Agrega la letra primero.")
             return
 
+        modo = self.modo_var.get()
         ancho, alto = self._resolution()
         t = self.preview_time.get()
         titulo = self.titulo_var.get().strip()
-        fuente, fuente_titulo, fuente_peq = adapted_fonts(
-            self.font_size_var.get(), ancho, alto, lines)
+
+        if modo == "Kinetic Typography":
+            img = self._preview_kinetic(ancho, alto, lines, t, titulo)
+        else:
+            fuente, fuente_titulo, fuente_peq = adapted_fonts(
+                self.font_size_var.get(), ancho, alto, lines)
+            timing = self._ensure_timing(lines) or fallback_timing(lines, self._dur or 180)
+            img = render_preview_frame(
+                ancho=ancho, alto=alto, timing=timing, t=t,
+                dur=self._dur or 180, titulo=titulo,
+                fuente=fuente, fuente_titulo=fuente_titulo, fuente_peq=fuente_peq,
+                esquema_key=self.esquema_var.get(),
+                alpha_mode=self.alpha_var.get(),
+                fondo_path=self.fondo_path.get())
+
+        self._show_preview_image(img, ancho, alto)
+
+    def _preview_kinetic(self, ancho, alto, lines, t, titulo):
+        """Genera preview estático simulando kinetic typography."""
+        from PIL import ImageDraw, ImageFont
+        from app.config import ESQUEMAS_KINETIC_GUI
+
+        esquema_key = ESQUEMAS_KINETIC_GUI.get(self.esquema_var.get(), "neon")
+        from lyric_video_manim import ESQUEMAS_KINETIC
+        esquema = ESQUEMAS_KINETIC.get(esquema_key, ESQUEMAS_KINETIC["neon"])
+
+        img = Image.new("RGB", (ancho, alto), (8, 8, 16))
+        draw = ImageDraw.Draw(img)
+
+        # Usar fuente seleccionada
+        font_name = self.fuente_var.get()
+        font_size = self.font_size_var.get()
+
+        # Intentar cargar fuente del sistema
+        try:
+            fuente = ImageFont.truetype(font_name, font_size)
+        except Exception:
+            # Intentar variantes comunes
+            for ext in [".ttf", ".otf"]:
+                for path in [f"C:/Windows/Fonts/{font_name}{ext}",
+                             f"C:/Windows/Fonts/{font_name.lower()}{ext}"]:
+                    try:
+                        fuente = ImageFont.truetype(path, font_size)
+                        break
+                    except Exception:
+                        continue
+                else:
+                    continue
+                break
+            else:
+                fuente = ImageFont.truetype("arial.ttf", font_size)
+
+        # Determinar qué líneas mostrar según el tiempo
         timing = self._ensure_timing(lines) or fallback_timing(lines, self._dur or 180)
+        active_idx = 0
+        for i, ts in enumerate(timing):
+            if ts.get("inicio", 0) <= t <= ts.get("fin", 0):
+                active_idx = i
+                break
+            if ts.get("inicio", 0) > t:
+                active_idx = max(0, i - 1)
+                break
 
-        img = render_preview_frame(
-            ancho=ancho, alto=alto, timing=timing, t=t,
-            dur=self._dur or 180, titulo=titulo,
-            fuente=fuente, fuente_titulo=fuente_titulo, fuente_peq=fuente_peq,
-            esquema_key=self.esquema_var.get(),
-            alpha_mode=self.alpha_var.get(),
-            fondo_path=self.fondo_path.get())
+        color_activo = esquema["activo"]
+        color_pasado = esquema["pasado"]
+        color_futuro = esquema["futuro"]
 
-        # Resize for canvas
+        # Dibujar estilo label
+        estilo = self.estilo_kinetic_var.get()
+        style_label = f"KINETIC  ·  {estilo.upper()}"
+        draw.text((ancho // 2, 30), style_label, fill="#3a3a5a",
+                  font=ImageFont.truetype("arial.ttf", 14), anchor="mt")
+
+        # Título
+        if titulo:
+            try:
+                tf = ImageFont.truetype("arial.ttf", 18)
+            except Exception:
+                tf = fuente
+            draw.text((ancho // 2, alto - 40), titulo, fill="#4a4a6a",
+                      font=tf, anchor="mb")
+
+        # Líneas de texto centradas
+        max_lines = 7
+        start = max(0, active_idx - 2)
+        end = min(len(timing), start + max_lines)
+        visible = timing[start:end]
+
+        y_center = alto // 2
+        line_h = int(font_size * 1.6)
+        y_start = y_center - (len(visible) * line_h) // 2
+
+        for i, ts in enumerate(visible):
+            real_idx = start + i
+            linea = ts.get("linea", ts.get("texto", ""))
+            y = y_start + i * line_h
+
+            if real_idx < active_idx:
+                color = color_pasado
+            elif real_idx == active_idx:
+                color = color_activo
+            else:
+                color = color_futuro
+
+            # Adaptar fuente al ancho
+            bbox = draw.textbbox((0, 0), linea, font=fuente)
+            tw = bbox[2] - bbox[0]
+            if tw > ancho * 0.85:
+                scale = (ancho * 0.85) / tw
+                try:
+                    f_scaled = ImageFont.truetype(fuente.path, int(font_size * scale))
+                except Exception:
+                    f_scaled = fuente
+            else:
+                f_scaled = fuente
+
+            # Glow para línea activa
+            if real_idx == active_idx:
+                glow_color = esquema["glow"]
+                for dx in [-2, -1, 0, 1, 2]:
+                    for dy in [-2, -1, 0, 1, 2]:
+                        if dx == 0 and dy == 0:
+                            continue
+                        draw.text((ancho // 2 + dx, y + dy), linea,
+                                  fill=glow_color + "30", font=f_scaled, anchor="mt")
+
+            draw.text((ancho // 2, y), linea, fill=color, font=f_scaled, anchor="mt")
+
+        # Fondo sutil si hay imagen
+        fondo = self.fondo_path.get()
+        if fondo and os.path.isfile(fondo):
+            ext = os.path.splitext(fondo)[1].lower()
+            if ext in (".jpg", ".jpeg", ".png", ".bmp"):
+                bg = Image.open(fondo).resize((ancho, alto), Image.LANCZOS).convert("RGB")
+                from PIL import ImageEnhance
+                bg = ImageEnhance.Brightness(bg).enhance(0.2)
+                img = Image.blend(bg, img, 0.7)
+
+        return img
+
+    def _show_preview_image(self, img, ancho, alto):
+        """Muestra imagen en el canvas de preview."""
         canvas = self.preview_panel.preview_canvas
         self.update_idletasks()
         cw = max(canvas.winfo_width(), 200)
@@ -402,6 +543,10 @@ class VisualizerApp(ctk.CTk):
             timing = t
             self._log(f"\u2713 Timestamps: {n} palabras")
 
+        # Resolver estilo kinetic
+        estilo_k = ESTILOS_KINETIC.get(self.estilo_kinetic_var.get(), "wave")
+        esquema_k = ESQUEMAS_KINETIC_GUI.get(self.esquema_var.get(), "neon")
+
         config = {
             "audio_path": self.audio_path.get(),
             "ancho": ancho,
@@ -424,6 +569,12 @@ class VisualizerApp(ctk.CTk):
             "spot_subtext": self.spot_subtext.get(),
             "spot_file": self.spot_file.get(),
             "spot_secs": self._spot_seconds(),
+            # Kinetic
+            "modo": self.modo_var.get(),
+            "estilo_kinetic": estilo_k,
+            "esquema_kinetic": esquema_k,
+            "fuente_nombre": self.fuente_var.get(),
+            "font_size": self.font_size_var.get(),
         }
 
         def on_progress(msg, pct):
@@ -455,3 +606,9 @@ class VisualizerApp(ctk.CTk):
         folder = os.path.dirname(out)
         if os.path.isdir(folder):
             os.startfile(folder)
+
+    def _open_settings(self):
+        SettingsWindow(self)
+
+    def _open_about(self):
+        AboutWindow(self)

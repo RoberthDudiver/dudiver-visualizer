@@ -43,6 +43,12 @@ class VideoGenerator:
     def run(self):
         """Ejecuta la generacion completa. Llamar desde un thread."""
         cfg = self.cfg
+
+        # Si es modo Kinetic, usar pipeline de Manim
+        if cfg.get("modo") == "Kinetic Typography":
+            self._render_kinetic()
+            return
+
         audio_path = cfg["audio_path"]
         ancho = cfg["ancho"]
         alto = cfg["alto"]
@@ -252,3 +258,64 @@ class VideoGenerator:
             self.on_progress("\u2713 Completado!", 100)
         except KeyboardInterrupt:
             self.on_progress("\u2715 Cancelado", 0)
+
+    def _render_kinetic(self):
+        """Render usando Manim kinetic typography."""
+        cfg = self.cfg
+        audio_path = cfg["audio_path"]
+        output = cfg["output_path"]
+        timing = cfg["timing"]
+
+        try:
+            self.on_progress("Preparando Manim...", 5)
+            self.on_log("Modo: Kinetic Typography")
+            self.on_log(f"Estilo: {cfg['estilo_kinetic']}")
+
+            # Guardar timestamps temporal para Manim
+            import json
+            ts_temp = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
+            with open(ts_temp, "w", encoding="utf-8") as f:
+                json.dump(timing, f, ensure_ascii=False)
+
+            # Importar render_kinetic
+            from lyric_video_manim import render_kinetic
+
+            # Construir args object
+            class Args:
+                pass
+
+            args = Args()
+            args.audio = audio_path
+            args.timestamps = ts_temp
+            args.output = output.replace(".webm", ".mp4")  # Manim genera MP4
+            args.estilo = cfg.get("estilo_kinetic", "wave")
+            args.resolucion = f"{cfg['ancho']}x{cfg['alto']}"
+            args.fps = cfg["fps"]
+            args.color = cfg.get("esquema_kinetic", "neon")
+            args.color_texto = None
+            args.color_glow = None
+            args.fuente = cfg.get("fuente_nombre", "Arial")
+            args.font_size = cfg.get("font_size", 72)
+            args.alpha = cfg.get("alpha_mode", False)
+
+            self.on_progress("Renderizando kinetic...", 15)
+            self.on_log(f"Fuente: {args.fuente}")
+            self.on_log(f"Resolución: {args.resolucion} @ {args.fps}fps")
+
+            result = render_kinetic(args)
+
+            # Limpiar temp
+            if os.path.exists(ts_temp):
+                os.remove(ts_temp)
+
+            if result:
+                self.on_log(f"\u2713 {os.path.basename(result)}")
+                self.on_progress("\u2713 Completado!", 100)
+            else:
+                self.on_progress("\u2715 Error en render", 0)
+
+        except Exception as ex:
+            import traceback
+            self.on_log(f"\u2715 ERROR: {ex}")
+            self.on_log(traceback.format_exc())
+            self.on_progress(f"\u2715 Error: {ex}", 0)
