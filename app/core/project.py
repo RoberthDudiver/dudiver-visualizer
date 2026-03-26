@@ -106,6 +106,13 @@ def get_project_config(app):
         "spot_duration": app.spot_duration.get(),
         "timestamps_file": ts_path or "",
         "lyrics_text": app.files_panel.letra_text.get("1.0", "end").strip(),
+        # Efectos
+        "efx_particulas": app.chk_particulas.get(),
+        "efx_onda": app.chk_onda.get(),
+        "efx_vineta": app.chk_vineta.get(),
+        "efx_glow": app.chk_glow.get(),
+        "efx_barra": app.chk_barra.get(),
+        "formato": app.formato_var.get(),
     }
 
 
@@ -151,6 +158,20 @@ def apply_project(app, config):
         app.spot_file.set(config["spot_file"])
     if config.get("spot_duration"):
         app.spot_duration.set(config["spot_duration"])
+
+    # Efectos
+    if "efx_particulas" in config:
+        app.chk_particulas.set(config["efx_particulas"])
+    if "efx_onda" in config:
+        app.chk_onda.set(config["efx_onda"])
+    if "efx_vineta" in config:
+        app.chk_vineta.set(config["efx_vineta"])
+    if "efx_glow" in config:
+        app.chk_glow.set(config["efx_glow"])
+    if "efx_barra" in config:
+        app.chk_barra.set(config["efx_barra"])
+    if config.get("formato"):
+        app.formato_var.set(config["formato"])
 
     # Cargar letra
     lyrics_text = config.get("lyrics_text", "")

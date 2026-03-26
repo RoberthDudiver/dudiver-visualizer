@@ -51,6 +51,56 @@ def create_file_row(parent, label, var, ftypes, all_inputs):
     return btn
 
 
+class SpinnerLabel(ctk.CTkLabel):
+    """Label animado que muestra actividad: texto + dots pulsantes.
+
+    Uso:
+        spinner = SpinnerLabel(parent, base_text="Procesando")
+        spinner.pack(...)
+        spinner.start()   # empieza animación
+        spinner.stop("Listo!")  # para y muestra mensaje final
+    """
+
+    FRAMES = ["", ".", "..", "...", "....", "...."]
+
+    def __init__(self, parent, base_text="Procesando", **kw):
+        kw.setdefault("font", ("Segoe UI", 11))
+        kw.setdefault("text_color", GOLD)
+        kw.setdefault("text", "")
+        super().__init__(parent, **kw)
+        self._base = base_text
+        self._idx = 0
+        self._running = False
+        self._after_id = None
+        self._elapsed = 0
+
+    def start(self, text=None):
+        if text:
+            self._base = text
+        self._idx = 0
+        self._elapsed = 0
+        self._running = True
+        self._tick()
+
+    def stop(self, final_text=None):
+        self._running = False
+        if self._after_id:
+            self.after_cancel(self._after_id)
+            self._after_id = None
+        self.configure(text=final_text or "")
+
+    def _tick(self):
+        if not self._running:
+            return
+        dots = self.FRAMES[self._idx % len(self.FRAMES)]
+        elapsed_s = self._elapsed // 2  # cada tick ~500ms
+        time_str = f" ({elapsed_s}s)" if elapsed_s >= 3 else ""
+        self.configure(text=f"{self._base}{dots}{time_str}")
+        self._idx += 1
+        self._elapsed += 1
+        self._after_id = self.after(500, self._tick)
+
+
 def create_dropdown(parent, label, var, values, all_inputs):
     """Crea una fila dropdown (OptionMenu)."""
     row = ctk.CTkFrame(parent, fg_color="transparent")
