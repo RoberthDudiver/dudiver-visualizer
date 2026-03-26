@@ -9,7 +9,8 @@ from app.config import ACCENT, ACCENT_H, GOLD, GREEN, DIM, INPUT_BG, DARK
 
 class Toolbar(ctk.CTkFrame):
     def __init__(self, parent, *, on_timestamps, on_preview, on_generate,
-                 on_cancel, on_open_folder, all_inputs):
+                 on_cancel, on_open_folder, on_settings, on_about,
+                 all_inputs):
         super().__init__(parent, fg_color=DARK, height=56, corner_radius=0)
         self.pack_propagate(False)
 
@@ -86,11 +87,19 @@ class Toolbar(ctk.CTkFrame):
                                          anchor="w", height=14)
         self.status_label.pack(fill="x")
 
-        # Abrir carpeta (right side)
+        # Right side buttons
+        ctk.CTkButton(self, text="?", height=34, width=34,
+                      font=("Segoe UI Bold", 13), fg_color="#2a2a4a",
+                      hover_color="#3a3a5a", text_color=GOLD, corner_radius=8,
+                      command=on_about).pack(side="right", padx=(3, 12))
+        ctk.CTkButton(self, text="\u2699", height=34, width=34,
+                      font=("Segoe UI", 16), fg_color="#2a2a4a",
+                      hover_color="#3a3a5a", text_color=DIM, corner_radius=8,
+                      command=on_settings).pack(side="right", padx=3)
         ctk.CTkButton(self, text="\U0001f4c2", height=34, width=40,
                       font=("Segoe UI", 14), fg_color="#2a2a4a",
                       hover_color="#3a3a5a", corner_radius=8,
-                      command=on_open_folder).pack(side="right", padx=(3, 12))
+                      command=on_open_folder).pack(side="right", padx=3)
 
     def set_status(self, msg, pct=None):
         """Actualiza barra de progreso y status label."""
