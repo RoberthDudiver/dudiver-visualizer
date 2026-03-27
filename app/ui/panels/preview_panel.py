@@ -13,6 +13,9 @@ from app.ui.components import create_section
 class PreviewPanel(ctk.CTkFrame):
     def __init__(self, parent, *, preview_time, on_time_change):
         super().__init__(parent, fg_color=DARK, corner_radius=0)
+        self._audio_path = None
+        self._audio_playing = False
+        self._preview_time = preview_time
 
         create_section(self, t("preview.title"))
 
@@ -269,3 +272,42 @@ class PreviewPanel(ctk.CTkFrame):
         """Abre el video en el reproductor del sistema."""
         if self._video_path and os.path.isfile(self._video_path):
             os.startfile(self._video_path)
+
+    # ── Audio playback for preview ──
+
+    def set_audio(self, audio_path):
+        """Configura el audio para reproducción en preview."""
+        self.stop_audio()
+        self._audio_path = audio_path
+
+    def play_audio_at(self, position_secs):
+        """Reproduce audio desde la posición dada (en segundos)."""
+        if not self._audio_path or not os.path.isfile(self._audio_path):
+            return
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
+            pygame.mixer.music.load(self._audio_path)
+            pygame.mixer.music.play(start=position_secs)
+            self._audio_playing = True
+        except Exception as e:
+            print(f"[DVS] Audio playback error: {e}")
+
+    def stop_audio(self):
+        """Detiene la reproducción de audio."""
+        if self._audio_playing:
+            try:
+                import pygame
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+            except Exception:
+                pass
+            self._audio_playing = False
+
+    def switch_to_preview(self):
+        """Cambia al tab Preview y pausa video si está reproduciéndose."""
+        if self._video_playing:
+            self._video_playing = False
+            self._vid_play_btn.configure(text="\u25B6")
+        self._tabs.set("Preview")

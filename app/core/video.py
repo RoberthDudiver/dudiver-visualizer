@@ -362,6 +362,7 @@ class VideoGenerator:
                 "fuente": cfg.get("fuente_nombre", "Arial"),
                 "font_size": cfg.get("font_size", 72),
                 "alpha": cfg.get("alpha_mode", False),
+                "fondo": cfg.get("fondo_path", None),
             }
 
             self.on_log(f"Fuente: {kinetic_config['fuente']}")
