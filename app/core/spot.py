@@ -136,7 +136,7 @@ def _draw_spot_overlay(img, ancho, alto, alpha, spot_text, spot_subtext,
 
 
 def _draw_platform_qrs(img, ancho, alto, alpha, platform_urls):
-    """Dibuja QR codes en grilla 2x2 con logos de plataformas."""
+    """Dibuja QR codes en grilla 2x2 con logos de plataformas — grandes y bonitos."""
     try:
         import qrcode
     except ImportError:
@@ -152,43 +152,69 @@ def _draw_platform_qrs(img, ancho, alto, alpha, platform_urls):
 
     # QR grandes — 2 columnas
     cols = 2 if n > 1 else 1
-    rows = (n + cols - 1) // cols  # ceil division
+    rows = (n + cols - 1) // cols
 
-    # Tamaño QR más grande
-    qr_size = min(int(ancho * 0.28), int(alto * 0.25), 280)
-    spacing_x = int(qr_size * 0.3)
-    spacing_y = int(qr_size * 0.15)
+    # Tamaño QR grande — sin límite fijo
+    qr_size = min(int(ancho * 0.35), int(alto * 0.28))
+    if n > 2:
+        qr_size = min(int(ancho * 0.30), int(alto * 0.24))
+    spacing_x = int(qr_size * 0.2)
+    spacing_y = int(qr_size * 0.12)
 
     try:
-        font_label = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf",
-                                         max(13, int(ancho * 0.018)))
+        font_label = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf",
+                                         max(16, int(ancho * 0.022)))
     except Exception:
         font_label = ImageFont.load_default()
 
     draw = ImageDraw.Draw(img)
-    label_h = int(ancho * 0.025)  # espacio para label debajo
+    label_h = int(ancho * 0.04)  # espacio para label debajo
+    pad = max(8, int(qr_size * 0.06))  # padding del card
 
     # Calcular dimensiones totales de la grilla
-    grid_w = cols * qr_size + (cols - 1) * spacing_x
-    grid_h = rows * (qr_size + label_h) + (rows - 1) * spacing_y
+    card_w = qr_size + pad * 2
+    card_h = qr_size + pad * 2 + label_h
+    grid_w = cols * card_w + (cols - 1) * spacing_x
+    grid_h = rows * card_h + (rows - 1) * spacing_y
 
-    # Centrar la grilla en la zona inferior (debajo del texto)
+    # Centrar la grilla (debajo del texto)
     start_x = (ancho - grid_w) // 2
-    start_y = int(alto * 0.30)
-    # Si no cabe, ajustar
-    if start_y + grid_h > alto - 20:
-        start_y = max(int(alto * 0.22), alto - grid_h - 20)
+    start_y = int(alto * 0.28)
+    if start_y + grid_h > alto - 30:
+        start_y = max(int(alto * 0.20), alto - grid_h - 30)
 
     for i, (platform_key, url) in enumerate(active):
         col = i % cols
         row = i // cols
 
-        x = start_x + col * (qr_size + spacing_x)
-        y = start_y + row * (qr_size + label_h + spacing_y)
+        cx = start_x + col * (card_w + spacing_x)
+        cy = start_y + row * (card_h + spacing_y)
 
+        info = PLATFORMS.get(platform_key, PLATFORMS.get("custom", {}))
+        color = info.get("color", "#FFFFFF")
+        rgb = _hex_to_rgb(color)
+
+        # Card con fondo oscuro semitransparente y borde de color
+        card_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        card_draw = ImageDraw.Draw(card_overlay)
+        r = max(8, int(qr_size * 0.05))
+        # Sombra
+        card_draw.rounded_rectangle(
+            [cx + 3, cy + 3, cx + card_w + 3, cy + card_h + 3],
+            radius=r, fill=(0, 0, 0, int(120 * alpha)))
+        # Fondo del card
+        card_draw.rounded_rectangle(
+            [cx, cy, cx + card_w, cy + card_h],
+            radius=r, fill=(20, 20, 30, int(220 * alpha)),
+            outline=rgb + (int(200 * alpha),), width=2)
+        img.paste(Image.alpha_composite(
+            img.convert("RGBA"), card_overlay).convert("RGB"))
+
+        # QR centrado en el card
+        qr_x = cx + pad
+        qr_y = cy + pad
         qr_img = create_qr_with_logo(url, platform_key, qr_size)
 
-        # Aplicar fade
         if alpha < 1.0:
             qr_rgba = qr_img.convert("RGBA")
             a_ch = qr_rgba.split()[3]
@@ -196,14 +222,12 @@ def _draw_platform_qrs(img, ancho, alto, alpha, platform_urls):
             qr_rgba.putalpha(a_ch)
             qr_img = qr_rgba
 
-        img.paste(qr_img.convert("RGB"), (x, y),
+        img.paste(qr_img.convert("RGB"), (qr_x, qr_y),
                   qr_img.convert("RGBA"))
 
-        # Label con nombre debajo del QR
-        info = PLATFORMS.get(platform_key, PLATFORMS.get("custom", {}))
-        color = info.get("color", "#FFFFFF")
-        rgb = _hex_to_rgb(color)
+        # Label con color de la plataforma
         label_c = tuple(int(ch * alpha) for ch in rgb)
-        draw.text((x + qr_size // 2, y + qr_size + 6),
+        draw = ImageDraw.Draw(img)
+        draw.text((cx + card_w // 2, qr_y + qr_size + pad // 2 + 2),
                   info.get("name", platform_key),
                   fill=label_c, font=font_label, anchor="mt")

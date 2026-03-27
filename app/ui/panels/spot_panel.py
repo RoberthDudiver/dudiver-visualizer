@@ -28,6 +28,7 @@ class SpotPanel(ctk.CTkFrame):
         self._spot_enabled = spot_enabled
         self._spot_type = spot_type
         self._spot_file = spot_file
+        self._remembered_files = {"Imagen": "", "Video": ""}  # recordar archivo por tipo
 
         create_section(self, t("spot.title"))
         spot = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
@@ -159,6 +160,18 @@ class SpotPanel(ctk.CTkFrame):
         else:
             self.spot_text_frame.pack_forget()
             self.spot_file_frame.pack(fill="x", pady=2)
+            # Guardar archivo del tipo anterior, restaurar del tipo nuevo
+            prev_type = "Video" if val == "Imagen" else "Imagen"
+            current = self._spot_file.get()
+            if current:
+                self._remembered_files[prev_type] = current
+            remembered = self._remembered_files.get(val, "")
+            if remembered and os.path.isfile(remembered):
+                self._spot_file.set(remembered)
+            elif current and val != prev_type:
+                # Limpiar si cambia de tipo
+                self._spot_file.set("")
+            self._update_spot_file_label()
 
     def _update_spot_file_label(self):
         """Actualiza el label del archivo cuando cambia (ej. al cargar .dudi)."""

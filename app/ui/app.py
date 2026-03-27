@@ -41,56 +41,6 @@ from app.core.project import (
 )
 
 
-def _render_subprocess(config):
-    """Top-level function for multiprocessing — renders video in separate process."""
-    import os
-    import sys
-    import traceback
-
-    progress_file = config.pop("_progress_file", None)
-
-    # Recrear fonts PIL desde info serializable
-    font_name = config.pop("_font_name", None)
-    font_size_base = config.pop("_font_size_base", 40)
-
-    from app.utils.fonts import adapted_fonts
-    lines = config.get("lines", [])
-    ancho = config.get("ancho", 1920)
-    alto = config.get("alto", 1080)
-    fuente, fuente_titulo, fuente_peq, _ = adapted_fonts(
-        font_size_base, ancho, alto, lines, font_name=font_name)
-    config["fuente"] = fuente
-    config["fuente_titulo"] = fuente_titulo
-    config["fuente_peq"] = fuente_peq
-
-    def on_progress(msg, pct):
-        if progress_file:
-            try:
-                with open(progress_file, "w") as f:
-                    f.write(f"{pct}|{msg}")
-            except Exception:
-                pass
-
-    def on_log(msg):
-        pass  # Logs no van al UI desde el subprocess
-
-    try:
-        from app.core.video import VideoGenerator
-        gen = VideoGenerator(
-            config,
-            on_progress=on_progress,
-            on_log=on_log,
-            is_cancelled=lambda: False,  # cancel via terminate()
-        )
-        gen.run()
-    except Exception:
-        # Guardar error para que el proceso padre lo lea
-        err_log = config.get("output_path", "output") + ".error.log"
-        with open(err_log, "w") as f:
-            traceback.print_exc(file=f)
-        sys.exit(1)
-
-
 class VisualizerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -1062,25 +1012,9 @@ class VisualizerApp(ctk.CTk):
 
     def _gen_worker(self, lines):
         ancho, alto = self._resolution()
-        fuente, fuente_titulo, fuente_peq, font_found = adapted_fonts(
-            self.font_size_var.get(), ancho, alto, lines,
-            font_name=self.fuente_var.get())
-        if not font_found:
-            self._log(f"\u26a0 Fuente '{self.fuente_var.get()}' no encontrada, usando Arial")
 
-        # Ensure timing
-        self._set_status("\u27f3 Timestamps...", 5)
+        # Pre-cargar timing si ya existe (evita Whisper en subprocess)
         timing = self._ensure_timing(lines)
-        if not timing:
-            self._set_status("\u27f3 Ejecutando Whisper...", 8)
-            self._log("Sin timestamps, generando...")
-            audio = self.audio_path.get()
-            ts_path = get_ts_path(audio)
-            modelo = self.whisper_var.get()
-            t, n = generate_new(audio, ts_path, lines, modelo=modelo)
-            self._lineas = t
-            timing = t
-            self._log(f"\u2713 Timestamps: {n} palabras")
 
         # Resolver estilo kinetic
         estilo_k = ESTILOS_KINETIC.get(self.estilo_kinetic_var.get(), "wave")
@@ -1100,6 +1034,7 @@ class VisualizerApp(ctk.CTk):
             "start_time": self._start_time(),
             "timing": timing,
             "lines": lines,
+            "whisper_model": self.whisper_var.get(),
             # Fonts como info serializable (se recrean en subprocess)
             "_font_name": self.fuente_var.get(),
             "_font_size_base": self.font_size_var.get(),
@@ -1135,8 +1070,9 @@ class VisualizerApp(ctk.CTk):
         config["_progress_file"] = progress_file
 
         # Lanzar en proceso separado (se puede matar)
+        from app.core.render_worker import render_subprocess
         self._render_proc = multiprocessing.Process(
-            target=_render_subprocess, args=(config,), daemon=True)
+            target=render_subprocess, args=(config,), daemon=True)
         self._render_proc.start()
         self._log(f"Proceso de render iniciado (PID: {self._render_proc.pid})")
 
@@ -1144,10 +1080,8 @@ class VisualizerApp(ctk.CTk):
         last_pct = 0
         while self._render_proc.is_alive():
             if self._cancel:
-                self._render_proc.terminate()
-                self._render_proc.join(timeout=3)
-                if self._render_proc.is_alive():
-                    self._render_proc.kill()
+                self._kill_process_tree(self._render_proc.pid)
+                self._render_proc.join(timeout=2)
                 self._log("✗ Render cancelado")
                 self._set_status("Cancelado", 0)
                 self._enable_ui()
@@ -1187,6 +1121,8 @@ class VisualizerApp(ctk.CTk):
             pass
 
         if exit_code == 0:
+            self._set_status("✓ Video generado", 100)
+
             # Update timeline
             if self._dur > 0:
                 m, s = divmod(int(self._dur), 60)
@@ -1215,11 +1151,35 @@ class VisualizerApp(ctk.CTk):
 
     def _do_cancel(self):
         self._cancel = True
-        # Matar proceso inmediatamente
+        self._set_status("Cancelando...", None)
+        # Matar proceso y todos sus hijos (FFmpeg) inmediatamente
         proc = getattr(self, '_render_proc', None)
         if proc and proc.is_alive():
-            proc.terminate()
-            self._log("Matando proceso de render...")
+            self._kill_process_tree(proc.pid)
+            self._log("Proceso de render terminado")
+
+    def _kill_process_tree(self, pid):
+        """Mata un proceso y todos sus hijos (FFmpeg, etc.) de forma brutal."""
+        try:
+            import psutil
+            parent = psutil.Process(pid)
+            # Primero matar hijos (FFmpeg)
+            for child in parent.children(recursive=True):
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            # Luego matar padre
+            parent.kill()
+        except Exception:
+            # Fallback: Windows taskkill
+            try:
+                import subprocess
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True, timeout=5)
+            except Exception:
+                pass
         self._set_status("\u27f3 Cancelando...", None)
 
     def _open_folder(self):
