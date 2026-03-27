@@ -22,7 +22,7 @@ from app.config import (
 from app.core.timestamps import get_ts_path, load_existing, generate_new, fallback_timing
 from app.core.renderer import render_preview_frame
 from app.core.video import VideoGenerator
-from app.utils.fonts import adapted_fonts, load_pil_font
+from app.utils.fonts import adapted_fonts, load_pil_font, resolve_font_path
 from app.ui.toolbar import Toolbar
 from app.ui.panels.files_panel import FilesPanel
 from app.ui.panels.config_panel import ConfigPanel
@@ -337,6 +337,7 @@ class VisualizerApp(ctk.CTk):
                 name = re.sub(r'[-_]\d+$', '', name)
                 name = re.sub(r'[-_](v\d+|final|master|mix)$', '', name, flags=re.IGNORECASE)
                 self.titulo_var.set(name.strip())
+            self.preview_panel.set_audio(p)
             threading.Thread(target=self._load_audio_info, daemon=True).start()
 
     def _load_audio_info(self):
@@ -394,6 +395,8 @@ class VisualizerApp(ctk.CTk):
         """Dispara preview automático con debounce de 300ms."""
         if self._preview_pending:
             self.after_cancel(self._preview_pending)
+        # Cambiar a tab Preview y pausar video si estaba reproduciéndose
+        self.preview_panel.switch_to_preview()
         self._preview_pending = self.after(300, self._do_auto_preview)
 
     def _do_auto_preview(self):
@@ -474,6 +477,8 @@ class VisualizerApp(ctk.CTk):
                 fondo_path=self.fondo_path.get())
 
         self._show_preview_image(img, ancho, alto)
+        # Reproducir audio desde la posición actual del slider
+        self.preview_panel.play_audio_at(t)
 
     def _load_palabras_whisper(self):
         """Carga palabras individuales del JSON de Whisper si existe."""
@@ -500,17 +505,41 @@ class VisualizerApp(ctk.CTk):
         from lyric_video_manim import ESQUEMAS_KINETIC
         esquema = ESQUEMAS_KINETIC.get(esquema_key, ESQUEMAS_KINETIC["neon"])
 
-        img = Image.new("RGB", (ancho, alto), (8, 8, 16))
+        # Fondo: imagen si hay, sino negro
+        fondo = self.fondo_path.get()
+        if fondo and os.path.isfile(fondo):
+            ext = os.path.splitext(fondo)[1].lower()
+            if ext in (".jpg", ".jpeg", ".png", ".bmp"):
+                bg = Image.open(fondo).resize((ancho, alto), Image.LANCZOS).convert("RGB")
+                from PIL import ImageEnhance
+                img = ImageEnhance.Brightness(bg).enhance(0.2)
+            else:
+                img = Image.new("RGB", (ancho, alto), (8, 8, 16))
+        else:
+            img = Image.new("RGB", (ancho, alto), (8, 8, 16))
         draw = ImageDraw.Draw(img)
 
         font_name = self.fuente_var.get()
         font_size = self.font_size_var.get()
 
-        fuente, _ff = load_pil_font(font_name, font_size, bold=True)
+        # Resolver path de fuente directamente para poder crear a cualquier tamaño
+        font_path = resolve_font_path(font_name)
+        if not font_path:
+            font_path = "arial.ttf"
 
-        fuente_dim = fuente
+        def _make_font(sz):
+            try:
+                return ImageFont.truetype(font_path, sz)
+            except Exception:
+                try:
+                    return ImageFont.truetype("arial.ttf", sz)
+                except Exception:
+                    return ImageFont.load_default()
+
+        fuente = _make_font(font_size)
+
         try:
-            fuente_peq = ImageFont.truetype("arial.ttf", 14)
+            fuente_peq = _make_font(14)
         except Exception:
             fuente_peq = fuente
 
@@ -524,10 +553,7 @@ class VisualizerApp(ctk.CTk):
                   fill="#3a3a5a", font=fuente_peq, anchor="mt")
 
         if titulo:
-            try:
-                tf = ImageFont.truetype("arial.ttf", 18)
-            except Exception:
-                tf = fuente
+            tf = _make_font(18)
             draw.text((ancho // 2, alto - 40), titulo, fill="#4a4a6a",
                       font=tf, anchor="mb")
 
@@ -537,34 +563,41 @@ class VisualizerApp(ctk.CTk):
 
         if estilo_val == "oneword" and palabras:
             self._draw_kinetic_oneword(draw, palabras, t, ancho, alto,
-                                       fuente, font_size, color_activo,
+                                       font_path, font_size, color_activo,
                                        glow_color)
         elif palabras:
             self._draw_kinetic_words(draw, palabras, t, ancho, alto,
-                                     fuente, font_size, color_activo,
-                                     color_pasado, color_futuro, glow_color)
+                                     fuente, font_path, font_size,
+                                     color_activo, color_pasado,
+                                     color_futuro, glow_color)
         else:
-            # Fallback: líneas completas
             self._draw_kinetic_lines(draw, lines, t, ancho, alto,
-                                     fuente, font_size, color_activo,
-                                     color_pasado, color_futuro, glow_color)
+                                     fuente, font_path, font_size,
+                                     color_activo, color_pasado,
+                                     color_futuro, glow_color)
 
-        # Fondo sutil si hay imagen
-        fondo = self.fondo_path.get()
-        if fondo and os.path.isfile(fondo):
-            ext = os.path.splitext(fondo)[1].lower()
-            if ext in (".jpg", ".jpeg", ".png", ".bmp"):
-                bg = Image.open(fondo).resize((ancho, alto), Image.LANCZOS).convert("RGB")
-                from PIL import ImageEnhance
-                bg = ImageEnhance.Brightness(bg).enhance(0.2)
-                img = Image.blend(bg, img, 0.7)
+        # Aplicar efectos visuales
+        effects = {
+            "particulas": self.chk_particulas.get(),
+            "onda": self.chk_onda.get(),
+            "vineta": self.chk_vineta.get(),
+            "glow": self.chk_glow.get(),
+            "barra": self.chk_barra.get(),
+        }
+        img = self._apply_kinetic_effects(img, ancho, alto, t, effects, esquema)
 
         return img
 
     def _draw_kinetic_oneword(self, draw, palabras, t, ancho, alto,
-                              fuente, font_size, color_activo, glow_color):
+                              font_path, font_size, color_activo, glow_color):
         """Una sola palabra grande centrada que cambia según el tiempo."""
         from PIL import ImageFont
+
+        def _font(sz):
+            try:
+                return ImageFont.truetype(font_path, sz)
+            except Exception:
+                return ImageFont.truetype("arial.ttf", sz)
 
         # Encontrar la palabra activa
         palabra_actual = None
@@ -576,7 +609,6 @@ class VisualizerApp(ctk.CTk):
                     palabra_next = palabras[i + 1]
                 break
             if w["inicio"] > t:
-                # En un gap — mostrar la anterior desvaneciéndose
                 if i > 0:
                     palabra_actual = palabras[i - 1]
                 palabra_next = w
@@ -592,24 +624,14 @@ class VisualizerApp(ctk.CTk):
         if not texto:
             return
 
-        # Tamaño grande — proporcionado al canvas
-        big_size = min(int(ancho * 0.12), int(alto * 0.2))
-        big_size = max(big_size, font_size * 2)
+        # Tamaño grande — slider × 2, proporcional al canvas
+        big_size = max(font_size * 2, 60)
 
-        # Escalar si la palabra es muy larga
-        try:
-            f_big = ImageFont.truetype(fuente.path, big_size)
-        except Exception:
-            f_big = ImageFont.truetype("arial.ttf", big_size)
-
+        f_big = _font(big_size)
         bbox = draw.textbbox((0, 0), texto, font=f_big)
         tw = bbox[2] - bbox[0]
         if tw > ancho * 0.85:
-            scale = (ancho * 0.85) / tw
-            try:
-                f_big = ImageFont.truetype(fuente.path, int(big_size * scale))
-            except Exception:
-                f_big = ImageFont.truetype("arial.ttf", int(big_size * scale))
+            f_big = _font(int(big_size * (ancho * 0.85) / tw))
 
         cx, cy = ancho // 2, alto // 2
 
@@ -625,18 +647,21 @@ class VisualizerApp(ctk.CTk):
         if palabra_next:
             next_txt = palabra_next["palabra"].strip(" ,.:;!?")
             if next_txt:
-                try:
-                    f_sm = ImageFont.truetype(fuente.path, int(big_size * 0.35))
-                except Exception:
-                    f_sm = ImageFont.truetype("arial.ttf", int(big_size * 0.35))
+                f_sm = _font(max(16, int(big_size * 0.35)))
                 draw.text((cx, cy + big_size * 0.7), next_txt,
                           fill="#3a3a5a", font=f_sm, anchor="mm")
 
     def _draw_kinetic_words(self, draw, palabras, t, ancho, alto,
-                            fuente, font_size, color_activo, color_pasado,
-                            color_futuro, glow_color):
+                            fuente, font_path, font_size, color_activo,
+                            color_pasado, color_futuro, glow_color):
         """Dibuja preview word-by-word con la palabra activa resaltada."""
         from PIL import ImageFont
+
+        def _font(sz):
+            try:
+                return ImageFont.truetype(font_path, sz)
+            except Exception:
+                return ImageFont.truetype("arial.ttf", sz)
 
         # Agrupar palabras en frases (gap > 0.8s = nueva frase)
         frases = []
@@ -676,29 +701,21 @@ class VisualizerApp(ctk.CTk):
             real_fi = start + fi
             y = y_start + fi * line_h
 
-            # Construir texto completo de la frase para medir
             texto_frase = " ".join(w["palabra"] for w in frase)
 
             # Escalar fuente si la frase es muy ancha
             bbox = draw.textbbox((0, 0), texto_frase, font=fuente)
             tw = bbox[2] - bbox[0]
             if tw > ancho * 0.85:
-                scale = (ancho * 0.85) / tw
-                try:
-                    f_used = ImageFont.truetype(fuente.path, int(font_size * scale))
-                except Exception:
-                    f_used = fuente
+                f_used = _font(int(font_size * (ancho * 0.85) / tw))
             else:
                 f_used = fuente
 
             if real_fi != active_frase:
-                # Frase no activa — color tenue, texto completo
                 color = color_pasado if real_fi < active_frase else color_futuro
                 draw.text((ancho // 2, y), texto_frase, fill=color,
                           font=f_used, anchor="mt")
             else:
-                # Frase activa — dibujar palabra por palabra con colores
-                # Medir ancho total para centrar
                 total_w = 0
                 word_widths = []
                 space_w = draw.textlength(" ", font=f_used)
@@ -712,7 +729,6 @@ class VisualizerApp(ctk.CTk):
 
                 for wi, w in enumerate(frase):
                     if t >= w["inicio"] and t <= w["fin"]:
-                        # Palabra activa — glow + color activo
                         for dx in [-2, -1, 1, 2]:
                             for dy in [-2, -1, 1, 2]:
                                 draw.text((x + dx, y + dy), w["palabra"],
@@ -720,21 +736,26 @@ class VisualizerApp(ctk.CTk):
                         draw.text((x, y), w["palabra"], fill=color_activo,
                                   font=f_used, anchor="lt")
                     elif t > w["fin"]:
-                        # Palabra ya dicha
                         draw.text((x, y), w["palabra"], fill=color_pasado,
                                   font=f_used, anchor="lt")
                     else:
-                        # Palabra futura
                         draw.text((x, y), w["palabra"], fill=color_futuro,
                                   font=f_used, anchor="lt")
 
                     x += word_widths[wi] + space_w
 
     def _draw_kinetic_lines(self, draw, lines, t, ancho, alto,
-                            fuente, font_size, color_activo, color_pasado,
-                            color_futuro, glow_color):
+                            fuente, font_path, font_size, color_activo,
+                            color_pasado, color_futuro, glow_color):
         """Fallback: dibuja preview por líneas cuando no hay datos de palabras."""
         from PIL import ImageFont
+
+        def _font(sz):
+            try:
+                return ImageFont.truetype(font_path, sz)
+            except Exception:
+                return ImageFont.truetype("arial.ttf", sz)
+
         timing = self._ensure_timing(lines) or fallback_timing(lines, self._dur or 180)
 
         active_idx = 0
@@ -770,11 +791,7 @@ class VisualizerApp(ctk.CTk):
             bbox = draw.textbbox((0, 0), linea, font=fuente)
             tw = bbox[2] - bbox[0]
             if tw > ancho * 0.85:
-                scale = (ancho * 0.85) / tw
-                try:
-                    f_scaled = ImageFont.truetype(fuente.path, int(font_size * scale))
-                except Exception:
-                    f_scaled = fuente
+                f_scaled = _font(int(font_size * (ancho * 0.85) / tw))
             else:
                 f_scaled = fuente
 
@@ -787,6 +804,66 @@ class VisualizerApp(ctk.CTk):
                                   fill=glow_color + "30", font=f_scaled, anchor="mt")
 
             draw.text((ancho // 2, y), linea, fill=color, font=f_scaled, anchor="mt")
+
+    def _apply_kinetic_effects(self, img, ancho, alto, t, effects, esquema):
+        """Aplica efectos visuales (viñeta, glow, partículas, barra) a la preview Kinetic."""
+        from PIL import ImageDraw, ImageFilter
+        import random
+
+        # Viñeta
+        if effects.get("vineta", False):
+            vignette = Image.new("RGBA", (ancho, alto), (0, 0, 0, 0))
+            vdraw = ImageDraw.Draw(vignette)
+            for i in range(40):
+                alpha = int(180 * (1 - i / 40))
+                vdraw.rectangle([i, i, ancho - i, alto - i],
+                                outline=(0, 0, 0, alpha))
+            img = img.convert("RGBA")
+            img = Image.alpha_composite(img, vignette).convert("RGB")
+
+        # Glow global (bloom suave)
+        if effects.get("glow", False):
+            glow = img.filter(ImageFilter.GaussianBlur(radius=15))
+            from PIL import ImageEnhance
+            glow = ImageEnhance.Brightness(glow).enhance(1.3)
+            img = Image.blend(img, glow, 0.15)
+
+        # Partículas simples
+        if effects.get("particulas", False):
+            draw = ImageDraw.Draw(img)
+            random.seed(int(t * 10))
+            color_p = esquema.get("activo", "#ffffff")
+            for _ in range(25):
+                px = random.randint(0, ancho)
+                py = random.randint(0, alto)
+                sz = random.randint(1, 3)
+                alpha_hex = format(random.randint(40, 160), '02x')
+                draw.ellipse([px, py, px + sz, py + sz],
+                             fill=color_p + alpha_hex)
+
+        # Onda decorativa inferior
+        if effects.get("onda", False):
+            draw = ImageDraw.Draw(img)
+            import math
+            y_base = alto - 30
+            color_w = esquema.get("glow", "#4040ff")
+            for x in range(0, ancho, 2):
+                y = y_base + int(8 * math.sin((x + t * 100) * 0.03))
+                draw.line([(x, y), (x + 2, y)], fill=color_w + "60", width=2)
+
+        # Barra de progreso
+        if effects.get("barra", False):
+            draw = ImageDraw.Draw(img)
+            dur = self._dur or 180
+            progress = min(1.0, t / dur) if dur > 0 else 0
+            bar_y = alto - 6
+            bar_w = int(ancho * progress)
+            draw.rectangle([0, bar_y, ancho, alto], fill="#1a1a2e")
+            if bar_w > 0:
+                draw.rectangle([0, bar_y, bar_w, alto],
+                               fill=esquema.get("activo", "#e94560"))
+
+        return img
 
     def _show_preview_image(self, img, ancho, alto):
         """Muestra imagen en el canvas de preview."""
