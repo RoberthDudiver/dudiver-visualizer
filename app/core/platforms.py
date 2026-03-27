@@ -40,63 +40,38 @@ def _hex_to_rgb(hex_color):
 
 
 def create_platform_icon(platform_key, size=64):
-    """Crea un icono minimalista de la plataforma."""
+    """Carga el logo de la plataforma desde assets, o genera uno fallback."""
+    import os
+    assets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "assets")
+    logo_path = os.path.join(assets_dir, f"{platform_key}.png")
+
+    if os.path.isfile(logo_path):
+        try:
+            img = Image.open(logo_path).convert("RGBA")
+            img = img.resize((size, size), Image.LANCZOS)
+            return img
+        except Exception:
+            pass
+
+    # Fallback: icono generado
     info = PLATFORMS.get(platform_key, PLATFORMS["custom"])
     color = _hex_to_rgb(info["color"])
     bg = _hex_to_rgb(info["bg"])
 
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-
-    # Fondo circular
     margin = 2
     draw.ellipse([margin, margin, size - margin, size - margin],
                  fill=bg + (255,), outline=color + (255,), width=2)
-
     cx, cy = size // 2, size // 2
-    r = size // 3  # radio para dibujar
-
-    if platform_key == "spotify":
-        # 3 arcos curvos (simplificado)
-        for i, offset in enumerate([-8, 0, 8]):
-            y = cy + offset - 4
-            arc_w = r - abs(offset) // 2
-            draw.arc([cx - arc_w, y - 4, cx + arc_w, y + 8],
-                     start=200, end=340, fill=color, width=max(2, size // 20))
-
-    elif platform_key == "apple_music":
-        # Nota musical
-        try:
-            font = ImageFont.truetype("segoeui.ttf", size // 2)
-        except Exception:
-            font = ImageFont.load_default()
-        draw.text((cx, cy), "♪", fill=color, font=font, anchor="mm")
-
-    elif platform_key == "youtube_music":
-        # Triángulo play dentro de círculo
-        tri_size = r // 2
-        points = [
-            (cx - tri_size // 2 + 2, cy - tri_size),
-            (cx - tri_size // 2 + 2, cy + tri_size),
-            (cx + tri_size, cy),
-        ]
-        draw.polygon(points, fill=color)
-
-    elif platform_key == "amazon_music":
-        # Flecha sonrisa Amazon
-        try:
-            font = ImageFont.truetype("segoeui.ttf", size // 2)
-        except Exception:
-            font = ImageFont.load_default()
-        draw.text((cx, cy), "♫", fill=color, font=font, anchor="mm")
-
-    else:  # custom
-        try:
-            font = ImageFont.truetype("segoeuib.ttf", size // 3)
-        except Exception:
-            font = ImageFont.load_default()
-        draw.text((cx, cy), "★", fill=color, font=font, anchor="mm")
-
+    try:
+        font = ImageFont.truetype("segoeuib.ttf", size // 3)
+    except Exception:
+        font = ImageFont.load_default()
+    symbol = {"spotify": "♪", "apple_music": "♪", "youtube_music": "▶",
+              "amazon_music": "♫"}.get(platform_key, "★")
+    draw.text((cx, cy), symbol, fill=color, font=font, anchor="mm")
     return img
 
 

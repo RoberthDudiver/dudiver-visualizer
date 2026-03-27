@@ -83,6 +83,7 @@ class VideoGenerator:
         fuente = cfg["fuente"]
         fuente_titulo = cfg["fuente_titulo"]
         fuente_peq = cfg["fuente_peq"]
+        start_time = cfg.get("start_time", 0)
         spot_on = cfg["spot_on"]
         spot_type = cfg["spot_type"]
         spot_text = cfg["spot_text"]
@@ -100,6 +101,15 @@ class VideoGenerator:
         if max_dur > 0 and duracion > max_dur:
             duracion = max_dur
             self.on_log(f"Duracion limitada a {max_dur}s")
+
+        # Audio fade out (3s) cuando no es completo o hay spot
+        fade_dur = 3.0
+        if max_dur > 0 and max_dur < audio_clip.duration:
+            audio_clip = audio_clip.subclipped(start_time, start_time + duracion)
+            audio_clip = audio_clip.audio_fadeout(fade_dur)
+            self.on_log(f"Audio fade out: {fade_dur}s")
+        elif spot_on:
+            audio_clip = audio_clip.audio_fadeout(fade_dur)
 
         total_dur = duracion + (spot_secs if spot_on else 0)
 

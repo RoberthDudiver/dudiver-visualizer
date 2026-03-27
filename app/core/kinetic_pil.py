@@ -532,6 +532,8 @@ class KineticPILRenderer:
 
     def _build_ffmpeg_cmd(self, output, ext, audio_path, start_offset=0):
         pix_fmt_in = "rgba" if self.alpha_mode else "rgb24"
+        max_dur = self.cfg.get("max_dur", 0)
+        spot_on = self.cfg.get("spot_on", False)
 
         cmd = [
             shutil.which("ffmpeg") or "ffmpeg",
@@ -545,6 +547,13 @@ class KineticPILRenderer:
         if start_offset > 0:
             cmd += ["-ss", f"{start_offset:.3f}"]
         cmd += ["-i", audio_path, "-shortest"]
+
+        # Audio fade out (3s) cuando no es completo o hay spot
+        fade_dur = 3.0
+        total_audio = max_dur if max_dur > 0 else 0
+        if total_audio > 0 or spot_on:
+            fade_start = max(0, (total_audio or 999) - fade_dur)
+            cmd += ["-af", f"afade=t=out:st={fade_start:.2f}:d={fade_dur:.1f}"]
 
         if ext == ".webm":
             cmd += ["-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", "libvorbis"]
