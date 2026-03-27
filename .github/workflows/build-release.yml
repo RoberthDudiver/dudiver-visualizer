@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write          # Requerido por SignPath
 
 jobs:
   build:
@@ -19,15 +20,34 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install customtkinter pillow numpy moviepy librosa openai-whisper pyinstaller
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Download FFmpeg
+        run: |
+          curl -L -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
+          7z x ffmpeg.zip -offmpeg_extract
+          copy ffmpeg_extract\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe ffmpeg.exe
+          copy ffmpeg_extract\ffmpeg-master-latest-win64-gpl\bin\ffprobe.exe ffprobe.exe
+        shell: cmd
 
       - name: Build EXE
         run: |
-          pyinstaller --noconfirm --onefile --windowed --icon="icon.ico" --name="DudiverVisualizer" --add-data="icon.ico;." visualizer_app.py
+          pyinstaller --noconfirm "Dudiver Visualizer.spec"
+        shell: cmd
+
+      - name: Verify EXE exists
+        run: |
+          if not exist dist\DudiverVisualizer.exe (
+            echo ERROR: EXE not found!
+            exit /b 1
+          )
+          dir dist\DudiverVisualizer.exe
         shell: cmd
 
       - name: Create Inno Setup Script
@@ -38,6 +58,7 @@ jobs:
           AppVersion=3.0
           AppPublisher=Dudiver
           AppPublisherURL=https://github.com/RoberthDudiver
+          AppSupportURL=https://github.com/RoberthDudiver/Dudiver-Visualizer-Studio/issues
           DefaultDirName={autopf}\Dudiver Visualizer Studio
           DefaultGroupName=Dudiver Visualizer Studio
           OutputDir=installer
@@ -48,22 +69,25 @@ jobs:
           UninstallDisplayIcon={app}\DudiverVisualizer.exe
           WizardStyle=modern
           PrivilegesRequired=lowest
+          LicenseFile=LICENSE
 
           [Languages]
           Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
           Name: "english"; MessagesFile: "compiler:Default.isl"
 
           [Tasks]
-          Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+          Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
           [Files]
           Source: "dist\DudiverVisualizer.exe"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion
           Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
           Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-          Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 
           [Icons]
           Name: "{group}\Dudiver Visualizer Studio"; Filename: "{app}\DudiverVisualizer.exe"; IconFilename: "{app}\icon.ico"
+          Name: "{group}\Desinstalar Dudiver Visualizer"; Filename: "{uninstallexe}"
           Name: "{autodesktop}\Dudiver Visualizer Studio"; Filename: "{app}\DudiverVisualizer.exe"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
           [Run]
@@ -76,6 +100,37 @@ jobs:
           mkdir installer
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" setup.iss
         shell: pwsh
+
+      # ── Firma digital con SignPath (gratis para open source) ──
+      - name: Sign EXE with SignPath
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: 'dudiver-visualizer'
+          signing-policy-slug: 'release-signing'
+          artifact-configuration-slug: 'initial'
+
+          input-artifact-path: 'dist/DudiverVisualizer.exe'
+          output-artifact-path: 'dist/DudiverVisualizer.exe'
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 300
+
+      - name: Sign Installer with SignPath
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: 'dudiver-visualizer'
+          signing-policy-slug: 'release-signing'
+          artifact-configuration-slug: 'initial'
+
+          input-artifact-path: 'installer/DudiverVisualizerSetup.exe'
+          output-artifact-path: 'installer/DudiverVisualizerSetup.exe'
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 300
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
@@ -98,22 +153,26 @@ jobs:
             ## Dudiver Visualizer Studio ${{ github.ref_name }}
 
             ### Descargar / Download
-            - **DudiverVisualizerSetup.exe** — Instalador para Windows / Windows Installer
-            - **DudiverVisualizer.exe** — Portable (sin instalar) / Portable (no install)
+            - **DudiverVisualizerSetup.exe** — Instalador completo (incluye FFmpeg) ✅ Firmado
+            - **DudiverVisualizer.exe** — Portable (requiere FFmpeg instalado) ✅ Firmado
+
+            ### Incluido / Included
+            - Aplicación completa con todas las dependencias
+            - FFmpeg embebido (en el instalador)
+            - Soporte Karaoke + Kinetic Typography
+            - 9 estilos de animación
+            - Generación de QR con logos de plataformas
+            - Certificado digital (sin advertencia de Windows SmartScreen)
 
             ### Requisitos / Requirements
             - Windows 10/11
-            - FFmpeg instalado (para exportar video)
 
-            ### Como usar / How to use
-            1. Descarga e instala / Download and install
-            2. Abre la app / Open the app
-            3. Selecciona tu cancion y letra / Select your song and lyrics
-            4. Click en GENERAR VIDEO / Click GENERATE VIDEO
+            ### Opcional / Optional
+            - [Whisper](https://github.com/openai/whisper) — para sincronización automática con IA
+            - `pip install openai-whisper` desde terminal
 
             ---
-            **Recuerda**: Dale estrella al repo y sigue a @dudiver
-            **Remember**: Star the repo and follow @dudiver
+            **Open Source** — MIT License
           files: |
             dist/DudiverVisualizer.exe
             installer/DudiverVisualizerSetup.exe

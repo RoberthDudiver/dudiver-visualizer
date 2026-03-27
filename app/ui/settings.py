@@ -9,9 +9,12 @@ from app.config import ACCENT, ACCENT_H, DARK, CARD, DIM, INPUT_BG, GOLD, GREEN
 from app.i18n import t, get_lang, set_lang
 
 
-SETTINGS_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "settings.json"
+import sys as _sys
+SETTINGS_FILE = (
+    os.path.join(os.path.dirname(_sys.executable), "settings.json")
+    if getattr(_sys, "frozen", False) else
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "settings.json")
 )
 
 DEFAULT_SETTINGS = {
@@ -87,9 +90,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self.geometry(f"460x580+{(sw-460)//2}+{(sh-580)//2}")
 
         # Icono
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))))
-        ico_path = os.path.join(base_dir, "icon.ico")
+        from app.utils.paths import asset_path
+        ico_path = asset_path("icon.ico")
         if os.path.exists(ico_path):
             self.after(50, lambda: self.iconbitmap(ico_path))
 

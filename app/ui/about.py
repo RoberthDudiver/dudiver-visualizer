@@ -20,15 +20,14 @@ class AboutWindow(ctk.CTkToplevel):
         self.after(100, lambda: self.attributes("-topmost", True))
         self.after(200, lambda: self.lift())
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))))
+        from app.utils.paths import asset_path
 
         # Icono de la ventana
-        ico_path = os.path.join(base_dir, "icon.ico")
+        ico_path = asset_path("icon.ico")
         if os.path.exists(ico_path):
             self.after(50, lambda: self.iconbitmap(ico_path))
-        author_path = os.path.join(base_dir, "author.png")
-        icon_path = os.path.join(base_dir, "icon.png")
+        author_path = asset_path("author.png")
+        icon_path = asset_path("icon.png")
 
         w, h = 360, 480
         self.geometry(f"{w}x{h}")

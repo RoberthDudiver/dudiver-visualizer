@@ -15,7 +15,7 @@ from app.config import (
     Particula,
 )
 from app.core.audio import analyze_beats
-from app.core.spot import create_spot_frame
+from app.core.spot import create_spot_frame, close_spot_clips
 from app.core.kinetic_pil import render_kinetic_pil
 
 
@@ -27,11 +27,7 @@ def _kinetic_subprocess(config_dict):
     import sys
     from types import SimpleNamespace
 
-    skills_dir = os.path.normpath("C:/Users/rober/.claude/skills/music/scripts")
-    if skills_dir not in sys.path:
-        sys.path.insert(0, skills_dir)
-
-    from lyric_video_manim import render_kinetic
+    from app.scripts.lyric_video_manim import render_kinetic
 
     args = SimpleNamespace(**config_dict)
     render_kinetic(args)
@@ -156,6 +152,7 @@ class VideoGenerator:
             if bg_video:
                 bg_video.close()
             audio_clip.close()
+            close_spot_clips()
 
         except Exception as ex:
             import traceback
@@ -174,63 +171,99 @@ class VideoGenerator:
                       duracion, total_dur, total_frames, timing, beat_times,
                       fuente, fuente_titulo, titulo, output,
                       spot_on, spot_type, spot_text, spot_subtext, spot_file, spot_secs):
-        """Render en modo alpha (WebM + preview MP4)."""
+        """Render en modo alpha (WebM + preview MP4) via FFmpeg pipe."""
         self.on_progress("Generando video...", 15)
-        temp_dir = tempfile.mkdtemp(prefix="dvs_")
 
-        for fn in range(total_frames):
-            if self.is_cancelled():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                self.on_progress("\u2715 Cancelado", 0)
-                return
-            t = fn / fps
-            if t < duracion:
-                frame = crear_frame_alpha(ancho, alto, timing, t, duracion,
-                                          beat_times, fuente, fuente_titulo, titulo)
-                if spot_on and (duracion - t) < 2.0:
-                    fade = (duracion - t) / 2.0
-                    arr = np.array(frame)
-                    arr[:, :, 3] = (arr[:, :, 3] * fade).astype(np.uint8)
-                    frame = Image.fromarray(arr)
-            else:
-                frame = Image.new("RGBA", (ancho, alto), (0, 0, 0, 255))
-                spot_f = create_spot_frame(ancho, alto, t - duracion,
-                                           spot_type, spot_text, spot_subtext, spot_file,
-                                           platform_urls=cfg.get("platform_urls"))
-                frame.paste(spot_f)
-
-            frame.save(os.path.join(temp_dir, f"f_{fn:06d}.png"), "PNG")
-            if fn % (fps * 2) == 0:
-                pct = 15 + (fn / total_frames) * 70
-                self.on_progress(f"Frame {fn}/{total_frames}", pct)
-
-        self.on_progress("Codificando...", 88)
-        ff = shutil.which("ffmpeg") or "ffmpeg"
-        winff = os.path.expanduser("~/AppData/Local/Microsoft/WinGet/Links/ffmpeg.exe")
-        if os.path.exists(winff):
-            ff = winff
+        from app.utils.paths import get_ffmpeg
+        ff = get_ffmpeg()
 
         webm = output if output.endswith(".webm") else os.path.splitext(output)[0] + ".webm"
-        subprocess.run([ff, "-y", "-framerate", str(fps),
-                        "-i", os.path.join(temp_dir, "f_%06d.png"),
-                        "-i", audio_path, "-t", str(total_dur),
-                        "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
-                        "-b:v", "4M", "-c:a", "libopus", "-b:a", "128k",
-                        "-shortest", "-auto-alt-ref", "0", webm],
-                       capture_output=True)
-
         mp4 = os.path.splitext(output)[0] + "_preview.mp4"
-        subprocess.run([ff, "-y", "-framerate", str(fps),
-                        "-i", os.path.join(temp_dir, "f_%06d.png"),
-                        "-i", audio_path, "-t", str(total_dur),
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                        "-b:v", "5M", "-c:a", "aac", "-b:a", "192k",
-                        "-shortest", "-movflags", "+faststart", mp4],
-                       capture_output=True)
 
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        # Pipe RGBA frames directamente a FFmpeg (sin escribir PNGs a disco)
+        webm_cmd = [
+            ff, "-y", "-f", "rawvideo", "-pix_fmt", "rgba",
+            "-s", f"{ancho}x{alto}", "-r", str(fps), "-i", "-",
+            "-i", audio_path, "-t", str(total_dur),
+            "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
+            "-b:v", "4M", "-c:a", "libopus", "-b:a", "128k",
+            "-shortest", "-auto-alt-ref", "0", webm,
+        ]
+
+        stderr_log = os.path.splitext(output)[0] + "_ffmpeg_alpha.log"
+        stderr_file = open(stderr_log, "w", encoding="utf-8")
+        proc = subprocess.Popen(webm_cmd, stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL, stderr=stderr_file)
+
+        update_every = max(1, fps)
+        try:
+            for fn in range(total_frames):
+                if self.is_cancelled():
+                    proc.stdin.close()
+                    proc.terminate()
+                    proc.wait()
+                    stderr_file.close()
+                    self.on_progress("\u2715 Cancelado", 0)
+                    return
+                t = fn / fps
+                if t < duracion:
+                    frame = crear_frame_alpha(ancho, alto, timing, t, duracion,
+                                              beat_times, fuente, fuente_titulo, titulo)
+                    if spot_on and (duracion - t) < 2.0:
+                        fade = (duracion - t) / 2.0
+                        arr = np.array(frame)
+                        arr[:, :, 3] = (arr[:, :, 3] * fade).astype(np.uint8)
+                        frame = Image.fromarray(arr)
+                else:
+                    frame = Image.new("RGBA", (ancho, alto), (0, 0, 0, 255))
+                    spot_f = create_spot_frame(ancho, alto, t - duracion,
+                                               spot_type, spot_text, spot_subtext, spot_file,
+                                               platform_urls=self.cfg.get("platform_urls"))
+                    frame.paste(spot_f)
+
+                if frame.mode != "RGBA":
+                    frame = frame.convert("RGBA")
+
+                try:
+                    proc.stdin.write(frame.tobytes())
+                except (BrokenPipeError, OSError):
+                    self.on_log("FFmpeg cerró el pipe")
+                    break
+
+                if fn % update_every == 0:
+                    pct = 15 + (fn / total_frames) * 70
+                    self.on_progress(f"Frame {fn}/{total_frames}", pct)
+
+            proc.stdin.close()
+            proc.wait(timeout=120)
+        except Exception:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+            proc.terminate()
+            proc.wait()
+        stderr_file.close()
+
+        # Preview MP4 desde el WebM (rápido, no re-renderiza frames)
+        if os.path.isfile(webm):
+            self.on_progress("Generando preview MP4...", 90)
+            subprocess.run([ff, "-y", "-i", webm,
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                            "-b:v", "5M", "-c:a", "aac", "-b:a", "192k",
+                            "-movflags", "+faststart", mp4],
+                           capture_output=True)
+
+        # Limpiar log si OK
+        if proc.returncode == 0:
+            try:
+                os.remove(stderr_log)
+            except OSError:
+                pass
+
         self.on_log(f"\u2713 {os.path.basename(webm)}")
-        self.on_log(f"\u2713 {os.path.basename(mp4)}")
+        if os.path.isfile(mp4):
+            self.on_log(f"\u2713 {os.path.basename(mp4)}")
         self.on_progress("\u2713 Completado!", 100)
 
     def _render_normal(self, audio_clip, ancho, alto, fps, duracion, total_dur,
@@ -251,7 +284,7 @@ class VideoGenerator:
             if t >= duracion and spot_on:
                 img = create_spot_frame(ancho, alto, t - duracion,
                                         spot_type, spot_text, spot_subtext, spot_file,
-                                        platform_urls=cfg.get("platform_urls"))
+                                        platform_urls=self.cfg.get("platform_urls"))
                 return np.array(img)
 
             cur_bg = bg_image
@@ -323,16 +356,25 @@ class VideoGenerator:
             self.on_log("Modo: Kinetic Typography (PIL + FFmpeg)")
             self.on_log(f"Estilo: {cfg.get('estilo_kinetic', 'wave')}")
 
-            # Buscar timestamps Whisper con palabras individuales
-            whisper_ts = os.path.splitext(audio_path)[0] + "_timestamps.json"
+            # Buscar timestamps: primero whisper_raw embebido, luego archivo externo
             ts_path = None
+            whisper_raw = cfg.get("whisper_raw")
 
-            if os.path.isfile(whisper_ts):
-                with open(whisper_ts, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict) and "palabras" in data and data["palabras"]:
-                    ts_path = whisper_ts
-                    self.on_log(f"  {len(data['palabras'])} palabras individuales")
+            if whisper_raw and isinstance(whisper_raw, dict) and whisper_raw.get("palabras"):
+                # Whisper raw embebido en el proyecto — escribir a temp para el renderer
+                ts_path = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
+                with open(ts_path, "w", encoding="utf-8") as f:
+                    json.dump(whisper_raw, f, ensure_ascii=False)
+                self.on_log(f"  {len(whisper_raw['palabras'])} palabras (del proyecto)")
+            else:
+                # Fallback: archivo externo
+                whisper_ts = os.path.splitext(audio_path)[0] + "_timestamps.json"
+                if os.path.isfile(whisper_ts):
+                    with open(whisper_ts, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict) and "palabras" in data and data["palabras"]:
+                        ts_path = whisper_ts
+                        self.on_log(f"  {len(data['palabras'])} palabras (archivo externo)")
 
             if not ts_path:
                 ts_path = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")

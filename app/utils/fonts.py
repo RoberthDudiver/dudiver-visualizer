@@ -3,7 +3,6 @@
 import os
 from PIL import ImageFont
 
-from app.config import cargar_fuente
 
 # Cache de resolución nombre → path
 _font_path_cache = {}
@@ -201,7 +200,8 @@ def adapted_fonts(font_size, ancho, alto, lines, font_name=None):
             return font
     else:
         _found_flag = [True]
-        _load = lambda sz, bold=True: cargar_fuente(sz, bold)
+        from app.config import cargar_fuente as _cfg_cargar_fuente
+        _load = lambda sz, bold=True: _cfg_cargar_fuente(sz, bold)
 
     if lines:
         from PIL import Image, ImageDraw

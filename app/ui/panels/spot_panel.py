@@ -1,4 +1,4 @@
-"""Panel de spot publicitario con plataformas de streaming."""
+"""Panel de pantalla final con plataformas de streaming."""
 
 import os
 import customtkinter as ctk
@@ -28,7 +28,8 @@ class SpotPanel(ctk.CTkFrame):
         self._spot_enabled = spot_enabled
         self._spot_type = spot_type
         self._spot_file = spot_file
-        self._remembered_files = {"Imagen": "", "Video": ""}  # recordar archivo por tipo
+        self._remembered_files = {"Imagen": "", "Video": ""}
+        self._prev_spot_type = spot_type.get() or "Texto"
 
         create_section(self, t("spot.title"))
         spot = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
@@ -160,18 +161,19 @@ class SpotPanel(ctk.CTkFrame):
         else:
             self.spot_text_frame.pack_forget()
             self.spot_file_frame.pack(fill="x", pady=2)
-            # Guardar archivo del tipo anterior, restaurar del tipo nuevo
-            prev_type = "Video" if val == "Imagen" else "Imagen"
+            # Guardar archivo del tipo anterior
+            prev = self._prev_spot_type
             current = self._spot_file.get()
-            if current:
-                self._remembered_files[prev_type] = current
+            if prev in ("Imagen", "Video") and current:
+                self._remembered_files[prev] = current
+            # Restaurar archivo del tipo nuevo
             remembered = self._remembered_files.get(val, "")
             if remembered and os.path.isfile(remembered):
                 self._spot_file.set(remembered)
-            elif current and val != prev_type:
-                # Limpiar si cambia de tipo
+            elif val != prev:
                 self._spot_file.set("")
             self._update_spot_file_label()
+        self._prev_spot_type = val
 
     def _update_spot_file_label(self):
         """Actualiza el label del archivo cuando cambia (ej. al cargar .dudi)."""
@@ -183,6 +185,11 @@ class SpotPanel(ctk.CTkFrame):
         else:
             self.spot_file_label.configure(text=t("spot.none"))
 
+    def remember_file_for_type(self, spot_type, file_path):
+        """Registra un archivo recordado para un tipo (al cargar .dudi)."""
+        if spot_type in ("Imagen", "Video") and file_path:
+            self._remembered_files[spot_type] = file_path
+
     def _pick_spot_file(self):
         if self._spot_type.get() == "Imagen":
             ft = [(t("spot.images"), "*.jpg *.jpeg *.png *.bmp *.webp"), (t("spot.all"), "*.*")]
@@ -191,4 +198,8 @@ class SpotPanel(ctk.CTkFrame):
         p = filedialog.askopenfilename(title=t("spot.select_file"), filetypes=ft)
         if p:
             self._spot_file.set(p)
+            # Recordar para este tipo
+            cur_type = self._spot_type.get()
+            if cur_type in ("Imagen", "Video"):
+                self._remembered_files[cur_type] = p
             self.spot_file_label.configure(text=short_path(p))

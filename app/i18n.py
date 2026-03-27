@@ -2,11 +2,19 @@
 
 import json
 import os
+import sys
 
-_SETTINGS_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "settings.json"
-)
+
+def _get_settings_path():
+    """Settings van junto al exe (frozen) o en la raíz del proyecto (dev)."""
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), "settings.json")
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "settings.json")
+
+
+_SETTINGS_FILE = _get_settings_path()
 
 _current_lang = "es"
 
@@ -68,10 +76,11 @@ STRINGS = {
     "config.wave": {"es": "Onda", "en": "Wave"},
     "config.vignette": {"es": "Vi\u00f1eta", "en": "Vignette"},
     "config.progress_bar": {"es": "Barra progreso", "en": "Progress bar"},
+    "config.ai_precision": {"es": "Precisión IA", "en": "AI Precision"},
 
     # ── Spot panel ──
-    "spot.title": {"es": "\U0001f4e2 SPOT PUBLICITARIO", "en": "\U0001f4e2 PROMO SPOT"},
-    "spot.enable": {"es": "Activar spot al final", "en": "Enable spot at end"},
+    "spot.title": {"es": "\U0001f3ac PANTALLA FINAL", "en": "\U0001f3ac END SCREEN"},
+    "spot.enable": {"es": "Agregar pantalla final", "en": "Add end screen"},
     "spot.type": {"es": "Tipo:", "en": "Type:"},
     "spot.text": {"es": "Texto", "en": "Text"},
     "spot.image": {"es": "Imagen", "en": "Image"},
@@ -81,7 +90,7 @@ STRINGS = {
     "spot.file": {"es": "Archivo:", "en": "File:"},
     "spot.none": {"es": "ninguno", "en": "none"},
     "spot.duration": {"es": "Duracion:", "en": "Duration:"},
-    "spot.select_file": {"es": "Seleccionar archivo spot", "en": "Select spot file"},
+    "spot.select_file": {"es": "Seleccionar archivo", "en": "Select file"},
     "spot.images": {"es": "Imagenes", "en": "Images"},
     "spot.all": {"es": "Todos", "en": "All"},
 

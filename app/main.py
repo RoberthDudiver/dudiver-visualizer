@@ -3,6 +3,8 @@
 import os
 import customtkinter as ctk
 
+from app.utils.paths import asset_path
+
 
 def main():
     ctk.set_appearance_mode("dark")
@@ -11,8 +13,7 @@ def main():
     from app.ui.app import VisualizerApp
     app = VisualizerApp()
 
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    splash_path = os.path.join(base_dir, "splash.png")
+    splash_path = asset_path("splash.png")
 
     if os.path.exists(splash_path):
         from app.ui.splash import show_splash

@@ -3,6 +3,44 @@
 import os
 from PIL import Image, ImageDraw, ImageFont
 
+from app.utils.fonts import load_pil_font
+
+
+def _load_ui_fonts(ancho):
+    """Carga fuentes UI para spots de forma portable."""
+    font_big, _ = load_pil_font("Segoe UI", max(30, int(ancho * 0.04)), bold=True)
+    font_small, _ = load_pil_font("Segoe UI", max(20, int(ancho * 0.025)))
+    return font_big, font_small
+
+
+_spot_clip_cache = {}  # path → (clip, resized_clip)
+
+
+def _get_spot_clip(spot_file, ancho, alto):
+    """Retorna un VideoFileClip cacheado y redimensionado."""
+    key = (spot_file, ancho, alto)
+    if key in _spot_clip_cache:
+        clip = _spot_clip_cache[key]
+        if clip is not None:
+            return clip
+    from moviepy import VideoFileClip
+    clip = VideoFileClip(spot_file)
+    if clip.size != [ancho, alto]:
+        clip = clip.resized((ancho, alto))
+    _spot_clip_cache[key] = clip
+    return clip
+
+
+def close_spot_clips():
+    """Cierra todos los clips cacheados. Llamar al finalizar render."""
+    for clip in _spot_clip_cache.values():
+        try:
+            if clip:
+                clip.close()
+        except Exception:
+            pass
+    _spot_clip_cache.clear()
+
 
 def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext,
                       spot_file, platform_urls=None):
@@ -11,14 +49,7 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext,
 
     if spot_type == "Texto":
         draw = ImageDraw.Draw(img)
-        try:
-            font_big = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf",
-                                          max(30, int(ancho * 0.04)))
-            font_small = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf",
-                                            max(20, int(ancho * 0.025)))
-        except Exception:
-            font_big = ImageFont.load_default()
-            font_small = font_big
+        font_big, font_small = _load_ui_fonts(ancho)
 
         # Fade in
         alpha = min(1.0, t_spot / 1.5)
@@ -62,16 +93,12 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext,
 
     elif spot_type == "Video" and spot_file and os.path.isfile(spot_file):
         try:
-            from moviepy import VideoFileClip
-            clip = VideoFileClip(spot_file)
-            if clip.size != [ancho, alto]:
-                clip = clip.resized((ancho, alto))
+            clip = _get_spot_clip(spot_file, ancho, alto)
             t_video = min(t_spot, clip.duration - 0.1)
             frame = clip.get_frame(max(0, t_video))
             spot_img = Image.fromarray(frame)
             alpha = min(1.0, t_spot / 1.5)
             img = Image.blend(img, spot_img, alpha)
-            clip.close()
         except Exception:
             pass
         # Texto y QR encima del video
@@ -86,14 +113,7 @@ def _draw_spot_overlay(img, ancho, alto, alpha, spot_text, spot_subtext,
                        platform_urls):
     """Dibuja texto + QR codes encima de una imagen/video de fondo."""
     draw = ImageDraw.Draw(img)
-    try:
-        font_big = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf",
-                                       max(30, int(ancho * 0.04)))
-        font_small = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf",
-                                         max(20, int(ancho * 0.025)))
-    except Exception:
-        font_big = ImageFont.load_default()
-        font_small = font_big
+    font_big, font_small = _load_ui_fonts(ancho)
 
     c = int(255 * alpha)
 
@@ -161,11 +181,7 @@ def _draw_platform_qrs(img, ancho, alto, alpha, platform_urls):
     spacing_x = int(qr_size * 0.2)
     spacing_y = int(qr_size * 0.12)
 
-    try:
-        font_label = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf",
-                                         max(16, int(ancho * 0.022)))
-    except Exception:
-        font_label = ImageFont.load_default()
+    font_label, _ = load_pil_font("Segoe UI", max(16, int(ancho * 0.022)), bold=True)
 
     draw = ImageDraw.Draw(img)
     label_h = int(ancho * 0.04)  # espacio para label debajo
@@ -183,32 +199,40 @@ def _draw_platform_qrs(img, ancho, alto, alpha, platform_urls):
     if start_y + grid_h > alto - 30:
         start_y = max(int(alto * 0.20), alto - grid_h - 30)
 
+    # Una sola overlay RGBA para todas las cards (evita N alpha_composites full-size)
+    cards_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    cards_draw = ImageDraw.Draw(cards_overlay)
+    r = max(8, int(qr_size * 0.05))
+
     for i, (platform_key, url) in enumerate(active):
         col = i % cols
         row = i // cols
-
         cx = start_x + col * (card_w + spacing_x)
         cy = start_y + row * (card_h + spacing_y)
-
         info = PLATFORMS.get(platform_key, PLATFORMS.get("custom", {}))
-        color = info.get("color", "#FFFFFF")
-        rgb = _hex_to_rgb(color)
-
-        # Card con fondo oscuro semitransparente y borde de color
-        card_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        card_draw = ImageDraw.Draw(card_overlay)
-        r = max(8, int(qr_size * 0.05))
+        rgb = _hex_to_rgb(info.get("color", "#FFFFFF"))
         # Sombra
-        card_draw.rounded_rectangle(
+        cards_draw.rounded_rectangle(
             [cx + 3, cy + 3, cx + card_w + 3, cy + card_h + 3],
             radius=r, fill=(0, 0, 0, int(120 * alpha)))
         # Fondo del card
-        card_draw.rounded_rectangle(
+        cards_draw.rounded_rectangle(
             [cx, cy, cx + card_w, cy + card_h],
             radius=r, fill=(20, 20, 30, int(220 * alpha)),
             outline=rgb + (int(200 * alpha),), width=2)
-        img.paste(Image.alpha_composite(
-            img.convert("RGBA"), card_overlay).convert("RGB"))
+
+    # Un solo composite para todas las cards
+    img.paste(Image.alpha_composite(
+        img.convert("RGBA"), cards_overlay).convert("RGB"))
+
+    for i, (platform_key, url) in enumerate(active):
+        col = i % cols
+        row = i // cols
+        cx = start_x + col * (card_w + spacing_x)
+        cy = start_y + row * (card_h + spacing_y)
+        info = PLATFORMS.get(platform_key, PLATFORMS.get("custom", {}))
+        color = info.get("color", "#FFFFFF")
+        rgb = _hex_to_rgb(color)
 
         # QR centrado en el card
         qr_x = cx + pad
