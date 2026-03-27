@@ -18,7 +18,7 @@ class FilesPanel(ctk.CTkFrame):
         create_file_row(self, t("files.lyrics"), letra_path,
                         [(t("files.text"), "*.txt *.md")], all_inputs)
         create_file_row(self, t("files.background"), fondo_path,
-                        [(t("files.media"), "*.jpg *.png *.mp4 *.mov")], all_inputs)
+                        [(t("files.media"), "*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov *.avi")], all_inputs)
 
         alpha_cb = ctk.CTkCheckBox(self, text=t("files.transparent"),
                                    variable=alpha_var, font=("Segoe UI", 11),

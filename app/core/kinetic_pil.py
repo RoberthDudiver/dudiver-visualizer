@@ -154,6 +154,42 @@ def load_timestamps(path):
     return [], []
 
 
+def group_smart_oneword(palabras, min_word_len=3, max_group=4, max_gap=0.3):
+    """Agrupa palabras cortas con sus vecinas para formar frases con sentido.
+
+    Whisper a veces divide palabras como 'así' en 'a' + 'sí', o deja
+    palabras sueltas de 1-2 caracteres. Esta función las agrupa.
+    """
+    if not palabras:
+        return []
+    groups = []
+    i = 0
+    while i < len(palabras):
+        group = [palabras[i]]
+        # Si la palabra actual es corta, intentar agrupar con las siguientes
+        while (len(group) < max_group and i + len(group) < len(palabras)):
+            next_w = palabras[i + len(group)]
+            last_w = group[-1]
+            gap = next_w["inicio"] - last_w["fin"]
+            # Agrupar si: palabra actual corta, o próxima corta, y gap pequeño
+            current_text = " ".join(w["palabra"] for w in group)
+            if (gap <= max_gap and
+                (len(current_text) < min_word_len or
+                 len(next_w["palabra"].strip()) < min_word_len)):
+                group.append(next_w)
+            else:
+                break
+        # Crear entrada agrupada
+        texto = " ".join(w["palabra"].strip() for w in group)
+        groups.append({
+            "palabra": texto,
+            "inicio": group[0]["inicio"],
+            "fin": group[-1]["fin"],
+        })
+        i += len(group)
+    return groups
+
+
 def group_into_phrases(palabras, max_words=5, max_gap=0.8):
     if not palabras:
         return []
@@ -275,6 +311,19 @@ class KineticPILRenderer:
         self.effects = config.get("effects")
         self.cache = TextCache()
 
+    @staticmethod
+    def _get_audio_duration(audio_path):
+        """Obtiene la duración real del audio usando ffprobe."""
+        try:
+            ffprobe = shutil.which("ffprobe") or "ffprobe"
+            result = subprocess.run(
+                [ffprobe, "-v", "quiet", "-show_entries",
+                 "format=duration", "-of", "csv=p=0", audio_path],
+                capture_output=True, text=True, timeout=10)
+            return float(result.stdout.strip())
+        except Exception:
+            return 0.0
+
     def render(self):
         """Render completo: carga datos, genera frames, pipea a FFmpeg."""
         import time
@@ -297,19 +346,51 @@ class KineticPILRenderer:
         beat_times = detect_beats(audio_path)
         self.on_log(f"{len(beat_times)} beats detectados")
 
-        # Calcular duración total
+        # Calcular duración total basada en el audio real
+        audio_dur = self._get_audio_duration(audio_path)
         if palabras:
-            total_dur = palabras[-1]["fin"] + 0.5
+            ts_dur = palabras[-1]["fin"] + 0.5
         elif segmentos:
-            total_dur = segmentos[-1]["fin"] + 0.5
+            ts_dur = segmentos[-1]["fin"] + 0.5
         else:
-            total_dur = 10
+            ts_dur = 10
+
+        # Usar la mayor entre audio y timestamps
+        total_dur = max(audio_dur, ts_dur) if audio_dur > 0 else ts_dur
+
+        # Punto de inicio (desde dónde empieza el clip)
+        start_offset = self.cfg.get("start_time", 0)
+
+        # Limitar duración si el usuario lo configuró
+        max_dur = self.cfg.get("max_dur", 0)
+        is_completo = (max_dur <= 0)
+        if max_dur > 0:
+            # Si la canción es más corta que la duración elegida, usar la canción
+            if max_dur > total_dur:
+                self.on_log(f"Canción ({total_dur:.0f}s) más corta que {max_dur}s, "
+                            f"usando duración real")
+            else:
+                total_dur = max_dur
+            self.on_log(f"Duración: {total_dur:.0f}s desde {start_offset:.1f}s")
+        end_time = start_offset + total_dur
+
+        # Spot publicitario al final
+        spot_on = self.cfg.get("spot_on", False)
+        spot_secs = self.cfg.get("spot_secs", 5) if spot_on else 0
+        song_dur = total_dur  # duración de la canción sin spot
+        total_dur += spot_secs  # duración total con spot
+
         total_frames = int(total_dur * self.fps)
+        self.on_log(f"Duración: {song_dur:.1f}s + {spot_secs}s spot "
+                    f"= {total_dur:.1f}s (audio={audio_dur:.1f}s)")
 
         # Preparar fondo
         bg_img = self._load_background()
 
-        # Agrupar palabras en frases
+        # Agrupar palabras inteligentemente
+        if self.estilo == "oneword":
+            palabras = group_smart_oneword(palabras)
+            self.on_log(f"Oneword inteligente: {len(palabras)} grupos")
         frases = group_into_phrases(palabras) if palabras else []
 
         # Output
@@ -317,69 +398,140 @@ class KineticPILRenderer:
         ext = os.path.splitext(output)[1].lower()
 
         # FFmpeg command
-        ffmpeg_cmd = self._build_ffmpeg_cmd(output, ext, audio_path)
+        ffmpeg_cmd = self._build_ffmpeg_cmd(output, ext, audio_path, start_offset)
         self.on_log(f"Resolución: {self.ancho}x{self.alto} @ {self.fps}fps")
         self.on_log(f"Frames: {total_frames}")
 
-        # Abrir pipe
+        # Abrir pipe — stderr a DEVNULL para evitar deadlock
+        # (FFmpeg llena el buffer stderr → bloquea stdin → deadlock)
+        stderr_log = os.path.splitext(output)[0] + "_ffmpeg.log"
+        stderr_file = open(stderr_log, "w", encoding="utf-8")
         proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                stdout=subprocess.DEVNULL, stderr=stderr_file)
 
         try:
             anim_fn = ANIM_STYLES.get(self.estilo, _anim_wave)
+            mode = "RGBA" if self.alpha_mode else "RGB"
+            update_every = max(1, self.fps)  # Actualizar progreso cada segundo
 
             for frame_idx in range(total_frames):
                 if self.is_cancelled():
                     proc.stdin.close()
                     proc.terminate()
+                    proc.wait()
+                    stderr_file.close()
                     self.on_log("Cancelado")
                     self.on_progress("Cancelado", 0)
                     return None
 
-                t = frame_idx / self.fps
-                pct = int(frame_idx / total_frames * 100)
+                t = start_offset + frame_idx / self.fps
 
-                if frame_idx % (self.fps * 2) == 0:
+                if frame_idx % update_every == 0:
+                    pct = int(frame_idx / total_frames * 100)
                     elapsed = int(time.time() - start)
                     self.on_progress(f"Renderizando... {pct}% ({elapsed}s)", pct)
 
-                # Generar frame
-                if self.estilo == "oneword":
-                    frame = self._render_oneword_frame(
-                        t, bg_img, palabras, beat_times, anim_fn)
+                # Generar frame: spot o canción
+                if spot_on and t >= song_dur:
+                    from app.core.spot import create_spot_frame
+                    frame = create_spot_frame(
+                        self.ancho, self.alto, t - song_dur,
+                        self.cfg.get("spot_type", "Texto"),
+                        self.cfg.get("spot_text", ""),
+                        self.cfg.get("spot_subtext", ""),
+                        self.cfg.get("spot_file", ""),
+                        platform_urls=self.cfg.get("platform_urls"))
                 else:
-                    frame = self._render_phrase_frame(
-                        t, bg_img, frases, beat_times, anim_fn)
+                    if self.estilo == "oneword":
+                        frame = self._render_oneword_frame(
+                            t, bg_img, palabras, beat_times, anim_fn)
+                    else:
+                        frame = self._render_phrase_frame(
+                            t, bg_img, frases, beat_times, anim_fn)
 
-                # Aplicar efectos
-                frame = self._apply_effects(frame, t, total_dur, beat_times)
+                    # Aplicar efectos
+                    frame = self._apply_effects(frame, t, total_dur, beat_times)
+
+                    # Fade out en los últimos 2s (solo cuando NO es Completo)
+                    if not is_completo:
+                        fade_dur = 2.0
+                        remaining = song_dur - t
+                        if remaining < fade_dur and remaining > 0:
+                            fade_alpha = remaining / fade_dur
+                            frame = Image.blend(
+                                Image.new(frame.mode, frame.size, (0, 0, 0)),
+                                frame, fade_alpha)
+                    # Fade in al spot (transición suave)
+                    elif spot_on and remaining <= 0 and remaining > -0.5:
+                        fade_alpha = abs(remaining) / 0.5
+                        from app.core.spot import create_spot_frame
+                        spot_f = create_spot_frame(
+                            self.ancho, self.alto, 0,
+                            self.cfg.get("spot_type", "Texto"),
+                            self.cfg.get("spot_text", ""),
+                            self.cfg.get("spot_subtext", ""),
+                            self.cfg.get("spot_file", ""),
+                            platform_urls=self.cfg.get("platform_urls"))
+                        frame = Image.blend(frame, spot_f, fade_alpha)
+
+                # Asegurar modo correcto antes de escribir
+                if frame.mode != mode:
+                    frame = frame.convert(mode)
 
                 # Escribir frame raw a pipe
-                proc.stdin.write(frame.tobytes())
+                try:
+                    proc.stdin.write(frame.tobytes())
+                except (BrokenPipeError, OSError):
+                    self.on_log("FFmpeg cerró el pipe (posible error)")
+                    break
 
             proc.stdin.close()
-            proc.wait()
+            self.on_progress("Finalizando video (FFmpeg)...", 99)
+            self.on_log("Frames enviados, esperando FFmpeg...")
+            # Esperar con timeout para no colgarse infinitamente
+            try:
+                proc.wait(timeout=120)  # 2 min max para finalizar
+            except subprocess.TimeoutExpired:
+                self.on_log("FFmpeg tardó demasiado, terminando...")
+                proc.terminate()
+                proc.wait(timeout=10)
+            stderr_file.close()
 
             elapsed = int(time.time() - start)
             if proc.returncode == 0 and os.path.isfile(output):
                 self.on_log(f"Completado en {elapsed}s")
                 self.on_progress("Completado!", 100)
+                # Limpiar log si todo OK
+                try:
+                    os.remove(stderr_log)
+                except OSError:
+                    pass
                 return output
             else:
-                stderr = proc.stderr.read().decode(errors="replace")[-500:]
-                self.on_log(f"FFmpeg error: {stderr}")
+                # Leer log de error
+                try:
+                    with open(stderr_log, "r", encoding="utf-8") as f:
+                        err = f.read()[-500:]
+                    self.on_log(f"FFmpeg error: {err}")
+                except Exception:
+                    self.on_log("FFmpeg error: código de salida "
+                                f"{proc.returncode}")
                 self.on_progress("Error", 0)
                 return None
 
         except Exception as ex:
-            proc.stdin.close()
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
             proc.terminate()
+            proc.wait()
+            stderr_file.close()
             self.on_log(f"Error: {ex}")
             raise
 
-    def _build_ffmpeg_cmd(self, output, ext, audio_path):
+    def _build_ffmpeg_cmd(self, output, ext, audio_path, start_offset=0):
         pix_fmt_in = "rgba" if self.alpha_mode else "rgb24"
-        channels = 4 if self.alpha_mode else 3
 
         cmd = [
             shutil.which("ffmpeg") or "ffmpeg",
@@ -388,9 +540,11 @@ class KineticPILRenderer:
             "-s", f"{self.ancho}x{self.alto}",
             "-r", str(self.fps),
             "-i", "-",  # stdin
-            "-i", audio_path,
-            "-shortest",
         ]
+        # Audio: seek si hay start_offset
+        if start_offset > 0:
+            cmd += ["-ss", f"{start_offset:.3f}"]
+        cmd += ["-i", audio_path, "-shortest"]
 
         if ext == ".webm":
             cmd += ["-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", "libvorbis"]
@@ -496,10 +650,15 @@ class KineticPILRenderer:
         if bi > 0.3:
             scale *= 1.0 + bi * 0.12
 
-        # Glow
+        # Glow (cacheado: blur es costoso)
         if alpha > 50:
-            glow_img = self._render_text_img(texto, big_size, self.esquema["glow"])
-            glow_blurred = glow_img.filter(ImageFilter.GaussianBlur(radius=8))
+            glow_key = (texto, big_size, "glow_blur")
+            if glow_key not in self.cache._cache:
+                glow_img = self._render_text_img(
+                    texto, big_size, self.esquema["glow"])
+                self.cache._cache[glow_key] = glow_img.filter(
+                    ImageFilter.GaussianBlur(radius=8))
+            glow_blurred = self.cache._cache[glow_key]
             self._composite_text(frame, glow_blurred, cx, cy,
                                  scale=scale, alpha=min(alpha, 80))
 
@@ -642,6 +801,19 @@ class KineticPILRenderer:
 
             x += ww + space_w * scale_factor
 
+    def _build_vignette(self):
+        """Pre-renderiza viñeta una sola vez (cacheada)."""
+        if hasattr(self, "_vignette_cache"):
+            return self._vignette_cache
+        vignette = Image.new("RGBA", (self.ancho, self.alto), (0, 0, 0, 0))
+        vd = ImageDraw.Draw(vignette)
+        for i in range(30):
+            a = int(150 * (1 - i / 30))
+            vd.rectangle([i, i, self.ancho - i, self.alto - i],
+                         outline=(0, 0, 0, a))
+        self._vignette_cache = vignette
+        return vignette
+
     def _apply_effects(self, frame, t, total_dur, beat_times):
         """Aplica efectos visuales (viñeta, partículas, onda, barra)."""
         effects = self.effects
@@ -650,14 +822,9 @@ class KineticPILRenderer:
 
         draw = ImageDraw.Draw(frame)
 
-        # Viñeta
+        # Viñeta (pre-cacheada, no recalcular cada frame)
         if effects.get("vineta", False):
-            vignette = Image.new("RGBA", (self.ancho, self.alto), (0, 0, 0, 0))
-            vd = ImageDraw.Draw(vignette)
-            for i in range(30):
-                a = int(150 * (1 - i / 30))
-                vd.rectangle([i, i, self.ancho - i, self.alto - i],
-                             outline=(0, 0, 0, a))
+            vignette = self._build_vignette()
             frame = Image.alpha_composite(frame.convert("RGBA"), vignette)
             if not self.alpha_mode:
                 frame = frame.convert("RGB")

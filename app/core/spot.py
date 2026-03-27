@@ -4,7 +4,8 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 
 
-def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext, spot_file):
+def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext,
+                      spot_file, platform_urls=None):
     """Genera un frame del spot publicitario."""
     img = Image.new("RGB", (ancho, alto), (0, 0, 0))
 
@@ -25,7 +26,7 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext, s
         # Texto principal centrado
         bbox1 = draw.textbbox((0, 0), spot_text, font=font_big)
         tw1 = bbox1[2] - bbox1[0]
-        y1 = alto // 2 - 40
+        y1 = int(alto * 0.12)
         c = int(255 * alpha)
         draw.text(((ancho - tw1) // 2, y1), spot_text,
                   fill=(c, c, c), font=font_big)
@@ -36,21 +37,28 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext, s
             tw2 = bbox2[2] - bbox2[0]
             ca = int(233 * alpha)
             cr = int(0.91 * c)
-            draw.text(((ancho - tw2) // 2, y1 + 60), spot_subtext,
+            draw.text(((ancho - tw2) // 2, y1 + int(alto * 0.07)), spot_subtext,
                       fill=(ca, cr, int(0.37 * c)), font=font_small)
 
         # Linea decorativa
         lw = int(ancho * 0.3 * alpha)
         cx = ancho // 2
-        ly = y1 - 20
+        ly = y1 - 15
         draw.line([(cx - lw, ly), (cx + lw, ly)],
                   fill=(int(233 * alpha), int(69 * alpha), int(96 * alpha)), width=2)
 
+        # QR codes de plataformas
+        if platform_urls:
+            _draw_platform_qrs(img, ancho, alto, alpha, platform_urls)
+
     elif spot_type == "Imagen" and spot_file and os.path.isfile(spot_file):
-        spot_img = Image.open(spot_file).resize((ancho, alto),
-                                                Image.Resampling.LANCZOS)
+        spot_img = Image.open(spot_file).convert("RGB").resize(
+            (ancho, alto), Image.Resampling.LANCZOS)
         alpha = min(1.0, t_spot / 1.5)
         img = Image.blend(img, spot_img, alpha)
+        # Texto y QR encima de la imagen
+        _draw_spot_overlay(img, ancho, alto, alpha, spot_text, spot_subtext,
+                           platform_urls)
 
     elif spot_type == "Video" and spot_file and os.path.isfile(spot_file):
         try:
@@ -66,5 +74,136 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext, s
             clip.close()
         except Exception:
             pass
+        # Texto y QR encima del video
+        alpha = min(1.0, t_spot / 1.5)
+        _draw_spot_overlay(img, ancho, alto, alpha, spot_text, spot_subtext,
+                           platform_urls)
 
     return img
+
+
+def _draw_spot_overlay(img, ancho, alto, alpha, spot_text, spot_subtext,
+                       platform_urls):
+    """Dibuja texto + QR codes encima de una imagen/video de fondo."""
+    draw = ImageDraw.Draw(img)
+    try:
+        font_big = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf",
+                                       max(30, int(ancho * 0.04)))
+        font_small = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf",
+                                         max(20, int(ancho * 0.025)))
+    except Exception:
+        font_big = ImageFont.load_default()
+        font_small = font_big
+
+    c = int(255 * alpha)
+
+    # Semitransparente detrás del texto para legibilidad
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ov_draw = ImageDraw.Draw(overlay)
+    ov_draw.rectangle([0, 0, ancho, int(alto * 0.18)],
+                      fill=(0, 0, 0, int(160 * alpha)))
+    img.paste(Image.alpha_composite(
+        img.convert("RGBA"), overlay).convert("RGB"))
+
+    # Texto principal
+    y1 = int(alto * 0.12)
+    if spot_text:
+        bbox1 = draw.textbbox((0, 0), spot_text, font=font_big)
+        tw1 = bbox1[2] - bbox1[0]
+        draw.text(((ancho - tw1) // 2, y1 - int(alto * 0.06)),
+                  spot_text, fill=(c, c, c), font=font_big)
+
+    # Subtexto
+    if spot_subtext:
+        bbox2 = draw.textbbox((0, 0), spot_subtext, font=font_small)
+        tw2 = bbox2[2] - bbox2[0]
+        ca = int(233 * alpha)
+        draw.text(((ancho - tw2) // 2, y1),
+                  spot_subtext, fill=(ca, int(0.91 * c), int(0.37 * c)),
+                  font=font_small)
+
+    # Linea decorativa
+    lw = int(ancho * 0.3 * alpha)
+    cx = ancho // 2
+    ly = y1 - int(alto * 0.08)
+    draw.line([(cx - lw, ly), (cx + lw, ly)],
+              fill=(int(233 * alpha), int(69 * alpha), int(96 * alpha)),
+              width=2)
+
+    # QR codes de plataformas
+    if platform_urls:
+        _draw_platform_qrs(img, ancho, alto, alpha, platform_urls)
+
+
+def _draw_platform_qrs(img, ancho, alto, alpha, platform_urls):
+    """Dibuja QR codes en grilla 2x2 con logos de plataformas."""
+    try:
+        import qrcode
+    except ImportError:
+        return
+
+    active = [(k, v) for k, v in platform_urls.items() if v and v.strip()]
+    if not active:
+        return
+
+    from app.core.platforms import PLATFORMS, create_qr_with_logo, _hex_to_rgb
+
+    n = len(active)
+
+    # QR grandes — 2 columnas
+    cols = 2 if n > 1 else 1
+    rows = (n + cols - 1) // cols  # ceil division
+
+    # Tamaño QR más grande
+    qr_size = min(int(ancho * 0.28), int(alto * 0.25), 280)
+    spacing_x = int(qr_size * 0.3)
+    spacing_y = int(qr_size * 0.15)
+
+    try:
+        font_label = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf",
+                                         max(13, int(ancho * 0.018)))
+    except Exception:
+        font_label = ImageFont.load_default()
+
+    draw = ImageDraw.Draw(img)
+    label_h = int(ancho * 0.025)  # espacio para label debajo
+
+    # Calcular dimensiones totales de la grilla
+    grid_w = cols * qr_size + (cols - 1) * spacing_x
+    grid_h = rows * (qr_size + label_h) + (rows - 1) * spacing_y
+
+    # Centrar la grilla en la zona inferior (debajo del texto)
+    start_x = (ancho - grid_w) // 2
+    start_y = int(alto * 0.30)
+    # Si no cabe, ajustar
+    if start_y + grid_h > alto - 20:
+        start_y = max(int(alto * 0.22), alto - grid_h - 20)
+
+    for i, (platform_key, url) in enumerate(active):
+        col = i % cols
+        row = i // cols
+
+        x = start_x + col * (qr_size + spacing_x)
+        y = start_y + row * (qr_size + label_h + spacing_y)
+
+        qr_img = create_qr_with_logo(url, platform_key, qr_size)
+
+        # Aplicar fade
+        if alpha < 1.0:
+            qr_rgba = qr_img.convert("RGBA")
+            a_ch = qr_rgba.split()[3]
+            a_ch = a_ch.point(lambda p: int(p * alpha))
+            qr_rgba.putalpha(a_ch)
+            qr_img = qr_rgba
+
+        img.paste(qr_img.convert("RGB"), (x, y),
+                  qr_img.convert("RGBA"))
+
+        # Label con nombre debajo del QR
+        info = PLATFORMS.get(platform_key, PLATFORMS.get("custom", {}))
+        color = info.get("color", "#FFFFFF")
+        rgb = _hex_to_rgb(color)
+        label_c = tuple(int(ch * alpha) for ch in rgb)
+        draw.text((x + qr_size // 2, y + qr_size + 6),
+                  info.get("name", platform_key),
+                  fill=label_c, font=font_label, anchor="mt")

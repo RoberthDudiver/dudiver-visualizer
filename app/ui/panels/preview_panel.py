@@ -93,24 +93,70 @@ class PreviewPanel(ctk.CTkFrame):
                                               font=("Segoe UI", 12), text_color=DIM)
         self._vid_placeholder.place(relx=0.5, rely=0.4, anchor="center")
 
-        # ── Timeline (shared, below tabs) ──
-        tl = ctk.CTkFrame(self, fg_color=DARK, corner_radius=0)
-        tl.pack(fill="x", padx=4)
+        # ── Reproductor de audio (below tabs) ──
+        player = ctk.CTkFrame(self, fg_color=DARK, corner_radius=0)
+        player.pack(fill="x", padx=4)
 
-        tl_info = ctk.CTkFrame(tl, fg_color="transparent")
-        tl_info.pack(fill="x")
-        self.time_label = ctk.CTkLabel(tl_info, text="0:00",
+        # Controles: Play/Stop + tiempo
+        ctrl = ctk.CTkFrame(player, fg_color="transparent")
+        ctrl.pack(fill="x")
+
+        self._play_btn = ctk.CTkButton(ctrl, text="\u25B6", width=36, height=28,
+                                        font=("Segoe UI", 14),
+                                        fg_color=ACCENT, hover_color=ACCENT_H,
+                                        corner_radius=8, command=self._toggle_audio_play)
+        self._play_btn.pack(side="left", padx=(0, 4))
+
+        self._stop_btn = ctk.CTkButton(ctrl, text="\u25A0", width=36, height=28,
+                                        font=("Segoe UI", 14),
+                                        fg_color="#2a2a4a", hover_color="#3a3a5a",
+                                        corner_radius=8, command=self._stop_audio_playback)
+        self._stop_btn.pack(side="left", padx=(0, 8))
+
+        self.time_label = ctk.CTkLabel(ctrl, text="0:00",
                                        font=("Segoe UI Black", 14), text_color=GOLD)
         self.time_label.pack(side="left")
-        self.dur_label = ctk.CTkLabel(tl_info, text="/ 0:00",
+        self.dur_label = ctk.CTkLabel(ctrl, text="/ 0:00",
                                       font=("Segoe UI", 12), text_color=DIM)
         self.dur_label.pack(side="left", padx=(4, 0))
 
-        self.timeline = ctk.CTkSlider(tl, from_=0, to=300, variable=preview_time,
+        # Timeline slider — visible solo en modo Completo
+        self._tl_frame = ctk.CTkFrame(player, fg_color="transparent")
+        self._tl_frame.pack(fill="x")
+        self.timeline = ctk.CTkSlider(self._tl_frame, from_=0, to=300,
+                                      variable=preview_time,
                                       fg_color=INPUT_BG, progress_color=ACCENT,
                                       button_color=GOLD, button_hover_color=ACCENT_H,
                                       command=on_time_change)
         self.timeline.pack(fill="x", pady=(2, 4))
+        self.timeline.bind("<ButtonRelease-1>", lambda e: self.stop_audio())
+
+        # ── Rango Desde/Hasta (slider doble) ──
+        self.range_frame = ctk.CTkFrame(player, fg_color="transparent")
+
+        self.start_var = tk.DoubleVar(value=0)
+        self.end_var = tk.DoubleVar(value=30)
+
+        range_row = ctk.CTkFrame(self.range_frame, fg_color="transparent")
+        range_row.pack(fill="x")
+        self.range_label = ctk.CTkLabel(range_row, text="0:00 → 0:30",
+                                         font=("Segoe UI", 9), text_color=GOLD)
+        self.range_label.pack(side="left")
+
+        self._range_canvas = tk.Canvas(self.range_frame, height=24,
+                                        bg="#1a1a2e", highlightthickness=0)
+        self._range_canvas.pack(fill="x", padx=4, pady=(2, 2))
+        self._range_max = 300
+        self._dragging = None  # "start", "end", or None
+        self._range_canvas.bind("<ButtonPress-1>", self._range_press)
+        self._range_canvas.bind("<B1-Motion>", self._range_drag)
+        self._range_canvas.bind("<ButtonRelease-1>", self._range_release)
+        self._range_canvas.bind("<Configure>", lambda e: self._draw_range())
+
+        # State del reproductor
+        self._on_time_change = on_time_change
+        self._playback_active = False
+        self._playback_after_id = None
 
         # Info bar
         self.info_label = ctk.CTkLabel(self, text=t("preview.select_audio"),
@@ -273,29 +319,133 @@ class PreviewPanel(ctk.CTkFrame):
         if self._video_path and os.path.isfile(self._video_path):
             os.startfile(self._video_path)
 
-    # ── Audio playback for preview ──
+    # ── Range slider doble ──
+
+    def _fmt_time(self, secs):
+        m, s = divmod(int(secs), 60)
+        return f"{m}:{s:02d}"
+
+    def _val_to_x(self, val):
+        w = self._range_canvas.winfo_width() - 20  # 10px padding each side
+        return 10 + (val / max(self._range_max, 1)) * w
+
+    def _x_to_val(self, x):
+        w = self._range_canvas.winfo_width() - 20
+        return max(0, min(self._range_max, ((x - 10) / max(w, 1)) * self._range_max))
+
+    def _draw_range(self):
+        c = self._range_canvas
+        c.delete("all")
+        w = c.winfo_width()
+        h = c.winfo_height()
+        if w < 20:
+            return
+
+        start = self.start_var.get()
+        end = self.end_var.get()
+        x1 = self._val_to_x(start)
+        x2 = self._val_to_x(end)
+
+        # Track background
+        c.create_rectangle(10, h // 2 - 3, w - 10, h // 2 + 3,
+                           fill="#2a2a4a", outline="")
+        # Selected range (highlighted)
+        c.create_rectangle(x1, h // 2 - 3, x2, h // 2 + 3,
+                           fill="#e94560", outline="")
+        # Start handle (green)
+        c.create_oval(x1 - 7, h // 2 - 7, x1 + 7, h // 2 + 7,
+                      fill="#00cc66", outline="#008844", width=1, tags="start")
+        # End handle (red)
+        c.create_oval(x2 - 7, h // 2 - 7, x2 + 7, h // 2 + 7,
+                      fill="#e94560", outline="#b8354a", width=1, tags="end")
+
+        # Update label
+        self.range_label.configure(
+            text=f"{self._fmt_time(start)} → {self._fmt_time(end)}")
+
+    def _range_press(self, event):
+        start_x = self._val_to_x(self.start_var.get())
+        end_x = self._val_to_x(self.end_var.get())
+        # Which handle is closer?
+        d_start = abs(event.x - start_x)
+        d_end = abs(event.x - end_x)
+        if d_start <= d_end:
+            self._dragging = "start"
+        else:
+            self._dragging = "end"
+        self._range_drag(event)
+
+    def _range_drag(self, event):
+        val = self._x_to_val(event.x)
+        if self._dragging == "start":
+            val = min(val, self.end_var.get() - 1)
+            self.start_var.set(max(0, val))
+        elif self._dragging == "end":
+            val = max(val, self.start_var.get() + 1)
+            self.end_var.set(min(self._range_max, val))
+        self._draw_range()
+
+    def _range_release(self, event):
+        self._dragging = None
+
+    def show_range(self, dur_secs, audio_dur):
+        """Muestra el range slider y oculta el timeline normal."""
+        audio_dur = max(audio_dur, 10)
+        self._range_max = audio_dur
+        if self.end_var.get() <= 0 or self.end_var.get() > audio_dur:
+            self.end_var.set(min(dur_secs, audio_dur))
+        if self.start_var.get() >= self.end_var.get():
+            self.start_var.set(0)
+        self._tl_frame.pack_forget()
+        self.range_frame.pack(fill="x", pady=(0, 2))
+        self.after(50, self._draw_range)
+
+    def hide_range(self):
+        """Oculta el range slider y muestra el timeline normal."""
+        self.start_var.set(0)
+        self.end_var.set(0)
+        self.range_frame.pack_forget()
+        self._tl_frame.pack(fill="x")
+
+    def get_range(self):
+        """Retorna (inicio, fin) en segundos, o (0, 0) si es Completo."""
+        if not self.range_frame.winfo_ismapped():
+            return 0, 0
+        return self.start_var.get(), self.end_var.get()
+
+    # ── Audio playback ──
 
     def set_audio(self, audio_path):
-        """Configura el audio para reproducción en preview."""
-        self.stop_audio()
+        """Configura el audio para reproducción."""
+        self._stop_audio_playback()
         self._audio_path = audio_path
 
     def play_audio_at(self, position_secs):
-        """Reproduce audio desde la posición dada (en segundos)."""
+        """Reproduce un snippet de audio desde la posición (para scrub del slider)."""
         if not self._audio_path or not os.path.isfile(self._audio_path):
             return
+        if self._playback_active:
+            return  # No interrumpir reproducción continua
         try:
             import pygame
             if not pygame.mixer.get_init():
-                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
-            pygame.mixer.music.load(self._audio_path)
-            pygame.mixer.music.play(start=position_secs)
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
+
+            if not self._audio_playing:
+                pygame.mixer.music.load(self._audio_path)
+
+            pygame.mixer.music.play(start=max(0, position_secs))
             self._audio_playing = True
+
+            # Auto-stop en 1.5s
+            if hasattr(self, '_audio_stop_id') and self._audio_stop_id:
+                self.after_cancel(self._audio_stop_id)
+            self._audio_stop_id = self.after(1500, self.stop_audio)
         except Exception as e:
-            print(f"[DVS] Audio playback error: {e}")
+            print(f"[DVS] Audio error: {e}")
 
     def stop_audio(self):
-        """Detiene la reproducción de audio."""
+        """Detiene audio sin afectar estado de playback."""
         if self._audio_playing:
             try:
                 import pygame
@@ -304,6 +454,96 @@ class PreviewPanel(ctk.CTkFrame):
             except Exception:
                 pass
             self._audio_playing = False
+
+    def _toggle_audio_play(self):
+        """Play/Pause del reproductor con sincronización de preview."""
+        if self._playback_active:
+            # Pause
+            self._playback_active = False
+            self._play_btn.configure(text="\u25B6")
+            if self._playback_after_id:
+                self.after_cancel(self._playback_after_id)
+                self._playback_after_id = None
+            try:
+                import pygame
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.pause()
+            except Exception:
+                pass
+            return
+
+        if not self._audio_path or not os.path.isfile(self._audio_path):
+            return
+
+        # Determinar rango de reproducción
+        start, end = self.get_range()
+        if end <= start:
+            # Completo: usar posición actual del slider
+            start = self._preview_time.get()
+            end = self.timeline.cget("to")
+
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
+            pygame.mixer.music.load(self._audio_path)
+            pygame.mixer.music.play(start=max(0, start))
+            self._audio_playing = True
+        except Exception as e:
+            print(f"[DVS] Audio play error: {e}")
+            return
+
+        self._playback_active = True
+        self._playback_start = start
+        self._playback_end = end
+        self._playback_t0 = start
+        self._play_btn.configure(text="\u275A\u275A")
+
+        import time as _time
+        self._playback_wall_t0 = _time.time()
+
+        # Iniciar loop de sync
+        self._playback_tick()
+
+    def _playback_tick(self):
+        """Actualiza slider + preview ~20 fps mientras reproduce."""
+        if not self._playback_active:
+            return
+
+        import time as _time
+        elapsed = _time.time() - self._playback_wall_t0
+        current = self._playback_t0 + elapsed
+
+        if current >= self._playback_end:
+            self._stop_audio_playback()
+            return
+
+        # Actualizar slider/tiempo
+        self._preview_time.set(current)
+        m, s = divmod(int(current), 60)
+        self.time_label.configure(text=f"{m}:{s:02d}")
+
+        # Actualizar preview (trigger callback del app)
+        if self._on_time_change:
+            self._on_time_change(current)
+
+        # Siguiente tick (~20fps = 50ms)
+        self._playback_after_id = self.after(50, self._playback_tick)
+
+    def _stop_audio_playback(self):
+        """Para completamente la reproducción."""
+        self._playback_active = False
+        self._play_btn.configure(text="\u25B6")
+        if self._playback_after_id:
+            self.after_cancel(self._playback_after_id)
+            self._playback_after_id = None
+        try:
+            import pygame
+            if pygame.mixer.get_init():
+                pygame.mixer.music.stop()
+        except Exception:
+            pass
+        self._audio_playing = False
 
     def switch_to_preview(self):
         """Cambia al tab Preview y pausa video si está reproduciéndose."""
