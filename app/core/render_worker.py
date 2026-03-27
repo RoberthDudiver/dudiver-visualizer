@@ -41,16 +41,20 @@ def render_subprocess(config):
         config["fuente_titulo"] = fuente_titulo
         config["fuente_peq"] = fuente_peq
 
-        # Timestamps (Whisper si es necesario)
+        # Timestamps — ya deben venir cargados desde la UI
         timing = config.get("timing")
         if not timing:
-            on_progress("Ejecutando Whisper...", 5)
+            # Intentar cargar desde archivo existente
             audio = config["audio_path"]
-            from app.core.timestamps import generate_new
-            ts_path = os.path.splitext(audio)[0] + "_timestamps.json"
-            timing, _ = generate_new(
-                audio, ts_path, lines,
-                modelo=config.get("whisper_model", "small"))
+            from app.core.timestamps import load_existing, get_ts_path, fallback_timing
+            ts_path = get_ts_path(audio)
+            timing = load_existing(ts_path, lines)
+            if not timing:
+                # Fallback: distribuir uniformemente (NO ejecutar Whisper)
+                on_progress("Generando timing uniforme...", 5)
+                from app.core.audio import get_audio_duration
+                dur = get_audio_duration(audio)
+                timing = fallback_timing(lines, dur)
             config["timing"] = timing
 
         on_progress("Iniciando render...", 10)

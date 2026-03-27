@@ -7,6 +7,7 @@ import os
 import re
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox
@@ -48,9 +49,9 @@ class VisualizerApp(ctk.CTk):
         self.configure(fg_color=DARK)
 
         # Icono — forzar el nuestro, bloquear el default de customtkinter
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ico = os.path.join(base_dir, "icon.ico")
-        png = os.path.join(base_dir, "icon.png")
+        from app.utils.paths import asset_path
+        ico = asset_path("icon.ico")
+        png = asset_path("icon.png")
         self._iconbitmap_method_called = True  # bloquea CTk override
 
         # Windows: AppUserModelID propio para que taskbar use nuestro icono
@@ -94,7 +95,7 @@ class VisualizerApp(ctk.CTk):
         self.tamano_var = ctk.StringVar(value="YouTube 1920\u00d71080")
         self.fps_var = ctk.StringVar(value="30")
         self.esquema_var = ctk.StringVar(value="Noche")
-        self.whisper_var = ctk.StringVar(value="base")
+        self.whisper_var = ctk.StringVar(value="Normal")
         self.duracion_var = ctk.StringVar(value="Completo")
         self.font_size_var = ctk.IntVar(value=50)
         self.alpha_var = ctk.BooleanVar(value=False)
@@ -127,7 +128,10 @@ class VisualizerApp(ctk.CTk):
         self._cancel = False
         self._worker = None
         self._lineas = None
+        self._whisper_raw = None  # Datos Whisper crudos (palabras individuales)
         self._dur = 0.0
+        self._data_lock = threading.Lock()  # protege _lineas y _dur
+        self._preview_pool = ThreadPoolExecutor(max_workers=1)
         self._pimg = None
         self._all_inputs = []
 
@@ -296,7 +300,13 @@ class VisualizerApp(ctk.CTk):
         fmt = self.formato_var.get()
         EXT_MAP = {"MP4": ".mp4", "WebM": ".webm", "MOV (ProRes)": ".mov", "AVI": ".avi"}
         ext = EXT_MAP.get(fmt, ".mp4")
-        folder = os.path.dirname(audio) if audio else os.path.expanduser("~/Desktop")
+        # Preferir carpeta del .dudi activo, luego del audio, luego Desktop
+        if self._dudi_path and os.path.isfile(self._dudi_path):
+            folder = os.path.dirname(self._dudi_path)
+        elif audio:
+            folder = os.path.dirname(audio)
+        else:
+            folder = os.path.expanduser("~/Desktop")
         return os.path.join(folder, f"{safe}_visualizer{ext}")
 
     def _esquema(self):
@@ -317,12 +327,14 @@ class VisualizerApp(ctk.CTk):
         return urls
 
     def _ensure_timing(self, lines):
-        if self._lineas and len(self._lineas) > 0:
-            return self._lineas
+        with self._data_lock:
+            if self._lineas and len(self._lineas) > 0:
+                return self._lineas
         ts_path = get_ts_path(self.audio_path.get())
         timing = load_existing(ts_path, lines)
         if timing:
-            self._lineas = timing
+            with self._data_lock:
+                self._lineas = timing
         return timing
 
     # ── Logging & Status ────────────────────────────────────────────────────
@@ -405,9 +417,11 @@ class VisualizerApp(ctk.CTk):
         try:
             from moviepy import AudioFileClip
             ac = AudioFileClip(self.audio_path.get())
-            self._dur = ac.duration
+            dur = ac.duration
             ac.close()
-            m, s = divmod(int(self._dur), 60)
+            with self._data_lock:
+                self._dur = dur
+            m, s = divmod(int(dur), 60)
             self.after(0, lambda: self.preview_panel.timeline.configure(to=self._dur))
             self.after(0, lambda: self.preview_panel.dur_label.configure(text=f"/ {m}:{s:02d}"))
             self.after(0, lambda: self.preview_panel.info_label.configure(
@@ -426,6 +440,33 @@ class VisualizerApp(ctk.CTk):
             return
         if self._worker and self._worker.is_alive():
             return
+
+        # Verificar si ya existen timestamps
+        ts_path = get_ts_path(audio)
+        already_has = False
+        if ts_path and os.path.isfile(ts_path):
+            already_has = True
+        # También verificar si ya hay timing en memoria (sync editor, AI, etc.)
+        with self._data_lock:
+            if self._lineas and len(self._lineas) > 0:
+                already_has = True
+
+        if already_has:
+            # Preguntar si quiere re-ejecutar
+            resp = messagebox.askyesno(
+                "Sincronización existente",
+                "Ya hay sincronización de letra.\n"
+                "¿Quieres re-analizar el audio?\n\n"
+                "(Esto reemplazará la sincronización actual)")
+            if not resp:
+                # Cargar los existentes si no están en memoria
+                lines = self._lyrics()
+                timing = self._ensure_timing(lines)
+                if timing:
+                    self._set_status(
+                        f"\u2713 Timestamps cargados ({len(timing)} líneas)", 100)
+                return
+
         self._cancel = False
         self._disable_ui()
         self._worker = threading.Thread(target=self._ts_worker, daemon=True)
@@ -433,16 +474,32 @@ class VisualizerApp(ctk.CTk):
 
     def _ts_worker(self):
         audio = self.audio_path.get()
-        ts_path = get_ts_path(audio)
-        modelo = self.whisper_var.get()
-        self._set_status(f"\u27f3 Whisper ({modelo})...", 10)
-        self._log(f"Generando timestamps... modelo={modelo}")
+        from app.config import whisper_model_name
+        label = self.whisper_var.get()
+        modelo = whisper_model_name(label)
+        self._set_status(f"\u27f3 Analizando audio ({label})...", 10)
+        self._log(f"Sincronizando letra... precisión={label} (modelo={modelo})")
         try:
             lines = self._lyrics()
-            timing, n = generate_new(audio, ts_path, lines, modelo=modelo)
-            self._lineas = timing
-            self._log(f"\u2713 {n} palabras -> {os.path.basename(ts_path)}")
+            # Ejecutar Whisper
+            res = whisper_generar_timestamps(audio, modelo=modelo, idioma="es")
+            n = len(res.get("palabras", []))
+            # Alinear con la letra
+            timing = alinear_letra_con_whisper(lines, res["palabras"])
+            with self._data_lock:
+                self._lineas = timing
+            # Guardar raw data en memoria para Kinetic y para embeber en .dudi
+            self._whisper_raw = res
+            # También guardar JSON externo para compatibilidad
+            ts_path = get_ts_path(audio)
+            if ts_path:
+                import json
+                with open(ts_path, "w", encoding="utf-8") as f:
+                    json.dump(res, f, ensure_ascii=False, indent=2)
+            self._log(f"\u2713 {n} palabras detectadas")
             self._set_status(f"\u2713 Timestamps listos ({n} palabras)", 100)
+            # Auto-save al .dudi
+            self._auto_save_project()
         except Exception as ex:
             self._log(f"\u2715 ERROR: {ex}")
             self._set_status(f"\u2715 Error: {ex}", 0)
@@ -495,9 +552,9 @@ class VisualizerApp(ctk.CTk):
         lines = self._lyrics()
         if not lines:
             return
-        # Mostrar "Cargando..." y generar en thread
+        # Mostrar "Cargando..." y generar en pool (max 1 thread, evita acumulación)
         self._show_loading()
-        threading.Thread(target=self._preview_thread, daemon=True).start()
+        self._preview_pool.submit(self._preview_thread)
 
     def _show_loading(self):
         """Muestra indicador de carga en el canvas."""
@@ -590,7 +647,7 @@ class VisualizerApp(ctk.CTk):
         """Genera preview simulando kinetic typography palabra por palabra."""
         from PIL import ImageDraw, ImageFont
         esquema_key = ESQUEMA_GUI_TO_KINETIC.get(self.esquema_var.get(), "neon")
-        from lyric_video_manim import ESQUEMAS_KINETIC
+        from app.scripts.lyric_video_manim import ESQUEMAS_KINETIC
         esquema = ESQUEMAS_KINETIC.get(esquema_key, ESQUEMAS_KINETIC["neon"])
 
         # Fondo: imagen si hay, sino negro
@@ -1035,6 +1092,7 @@ class VisualizerApp(ctk.CTk):
             "timing": timing,
             "lines": lines,
             "whisper_model": self.whisper_var.get(),
+            "whisper_raw": getattr(self, '_whisper_raw', None),
             # Fonts como info serializable (se recrean en subprocess)
             "_font_name": self.fuente_var.get(),
             "_font_size_base": self.font_size_var.get(),

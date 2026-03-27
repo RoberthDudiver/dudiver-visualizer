@@ -163,8 +163,8 @@ class HelpWindow(ctk.CTkToplevel):
         self.lift()
 
         # Icono
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ico = os.path.join(base_dir, "icon.ico")
+        from app.utils.paths import asset_path
+        ico = asset_path("icon.ico")
         if os.path.exists(ico):
             self.after(100, lambda: self.iconbitmap(ico))
 

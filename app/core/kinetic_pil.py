@@ -13,6 +13,7 @@ import shutil
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from app.utils.paths import get_ffmpeg, get_ffprobe
 
 from app.utils.fonts import resolve_font_path, load_pil_font
 
@@ -315,7 +316,7 @@ class KineticPILRenderer:
     def _get_audio_duration(audio_path):
         """Obtiene la duración real del audio usando ffprobe."""
         try:
-            ffprobe = shutil.which("ffprobe") or "ffprobe"
+            ffprobe = get_ffprobe()
             result = subprocess.run(
                 [ffprobe, "-v", "quiet", "-show_entries",
                  "format=duration", "-of", "csv=p=0", audio_path],
@@ -452,10 +453,11 @@ class KineticPILRenderer:
                     # Aplicar efectos
                     frame = self._apply_effects(frame, t, total_dur, beat_times)
 
+                    remaining = song_dur - t
+
                     # Fade out en los últimos 2s (solo cuando NO es Completo)
                     if not is_completo:
                         fade_dur = 2.0
-                        remaining = song_dur - t
                         if remaining < fade_dur and remaining > 0:
                             fade_alpha = remaining / fade_dur
                             frame = Image.blend(
@@ -536,7 +538,7 @@ class KineticPILRenderer:
         spot_on = self.cfg.get("spot_on", False)
 
         cmd = [
-            shutil.which("ffmpeg") or "ffmpeg",
+            get_ffmpeg(),
             "-y", "-f", "rawvideo",
             "-pix_fmt", pix_fmt_in,
             "-s", f"{self.ancho}x{self.alto}",
@@ -583,10 +585,22 @@ class KineticPILRenderer:
                     (self.ancho, self.alto), Image.LANCZOS).convert(mode)
                 from PIL import ImageEnhance
                 bg = ImageEnhance.Brightness(bg).enhance(0.25)
+                # Pre-cache bytes para copy rápido per-frame
+                self._bg_bytes = bg.tobytes()
+                self._bg_mode = mode
+                self._bg_size = (self.ancho, self.alto)
                 return bg
             except Exception:
                 pass
-        return Image.new(mode, (self.ancho, self.alto), bg_color)
+        bg = Image.new(mode, (self.ancho, self.alto), bg_color)
+        self._bg_bytes = bg.tobytes()
+        self._bg_mode = mode
+        self._bg_size = (self.ancho, self.alto)
+        return bg
+
+    def _fast_bg_copy(self):
+        """Copia rápida del fondo usando frombytes (más rápido que PIL .copy())."""
+        return Image.frombytes(self._bg_mode, self._bg_size, self._bg_bytes)
 
     def _make_font(self, size):
         try:
@@ -603,7 +617,7 @@ class KineticPILRenderer:
         if scale != 1.0:
             nw = max(1, int(text_img.width * scale))
             nh = max(1, int(text_img.height * scale))
-            text_img = text_img.resize((nw, nh), Image.LANCZOS)
+            text_img = text_img.resize((nw, nh), Image.BILINEAR)
 
         if alpha < 255:
             text_img = text_img.copy()
@@ -617,7 +631,7 @@ class KineticPILRenderer:
 
     def _render_oneword_frame(self, t, bg_img, palabras, beat_times, anim_fn):
         """Frame para estilo One Word: una palabra gigante centrada."""
-        frame = bg_img.copy()
+        frame = self._fast_bg_copy()
         if not palabras:
             return frame
 
@@ -677,7 +691,7 @@ class KineticPILRenderer:
 
     def _render_phrase_frame(self, t, bg_img, frases, beat_times, anim_fn):
         """Frame para estilos por frase (wave, zoom, slide, etc.)."""
-        frame = bg_img.copy()
+        frame = self._fast_bg_copy()
         if not frases:
             return frame
 
@@ -738,16 +752,21 @@ class KineticPILRenderer:
 
     def _draw_active_phrase(self, frame, frase, y, t, beat_times, anim_fn):
         """Dibuja la frase activa con animación por palabra."""
-        # Calcular posiciones de cada palabra
-        font = self._make_font(self.font_size)
-        dummy_img = Image.new("RGBA", (10, 10))
-        dd = ImageDraw.Draw(dummy_img)
-        space_w = dd.textlength(" ", font=font)
-
-        word_widths = []
-        for w in frase:
-            bbox = dd.textbbox((0, 0), w["palabra"], font=font)
-            word_widths.append(bbox[2] - bbox[0])
+        # Calcular posiciones de cada palabra (cacheado por frase)
+        frase_key = tuple(w["palabra"] for w in frase)
+        if not hasattr(self, "_phrase_metrics_cache"):
+            self._phrase_metrics_cache = {}
+        if frase_key not in self._phrase_metrics_cache:
+            font = self._make_font(self.font_size)
+            dummy_img = Image.new("RGBA", (10, 10))
+            dd = ImageDraw.Draw(dummy_img)
+            space_w = dd.textlength(" ", font=font)
+            word_widths = []
+            for w in frase:
+                bbox = dd.textbbox((0, 0), w["palabra"], font=font)
+                word_widths.append(bbox[2] - bbox[0])
+            self._phrase_metrics_cache[frase_key] = (word_widths, space_w)
+        word_widths, space_w = self._phrase_metrics_cache[frase_key]
 
         total_w = sum(word_widths) + space_w * (len(frase) - 1)
 
@@ -788,11 +807,15 @@ class KineticPILRenderer:
                 if bi > 0.4 and t <= w_fin:
                     final_scale *= 1.0 + bi * 0.08
 
-                # Glow para palabra activa
+                # Glow para palabra activa (cacheado)
                 if t <= w_fin and alpha > 100:
-                    glow_img = self._render_text_img(
-                        texto, self.font_size, self.esquema["glow"])
-                    glow_b = glow_img.filter(ImageFilter.GaussianBlur(6))
+                    glow_key = (texto, self.font_size, "glow_blur_phrase")
+                    if glow_key not in self.cache._cache:
+                        glow_img = self._render_text_img(
+                            texto, self.font_size, self.esquema["glow"])
+                        self.cache._cache[glow_key] = glow_img.filter(
+                            ImageFilter.GaussianBlur(6))
+                    glow_b = self.cache._cache[glow_key]
                     self._composite_text(frame, glow_b,
                                          cx + x_off, y + y_off,
                                          scale=final_scale,
@@ -811,7 +834,7 @@ class KineticPILRenderer:
             x += ww + space_w * scale_factor
 
     def _build_vignette(self):
-        """Pre-renderiza viñeta una sola vez (cacheada)."""
+        """Pre-renderiza viñeta una sola vez (cacheada como RGBA para paste)."""
         if hasattr(self, "_vignette_cache"):
             return self._vignette_cache
         vignette = Image.new("RGBA", (self.ancho, self.alto), (0, 0, 0, 0))
@@ -820,8 +843,9 @@ class KineticPILRenderer:
             a = int(150 * (1 - i / 30))
             vd.rectangle([i, i, self.ancho - i, self.alto - i],
                          outline=(0, 0, 0, a))
+        # Pre-convertir a RGB si no es alpha mode (para paste directo)
         self._vignette_cache = vignette
-        return vignette
+        return self._vignette_cache
 
     def _apply_effects(self, frame, t, total_dur, beat_times):
         """Aplica efectos visuales (viñeta, partículas, onda, barra)."""
@@ -831,19 +855,21 @@ class KineticPILRenderer:
 
         draw = ImageDraw.Draw(frame)
 
-        # Viñeta (pre-cacheada, no recalcular cada frame)
+        # Viñeta (pre-cacheada, paste directo sin alpha_composite)
         if effects.get("vineta", False):
             vignette = self._build_vignette()
-            frame = Image.alpha_composite(frame.convert("RGBA"), vignette)
-            if not self.alpha_mode:
-                frame = frame.convert("RGB")
+            frame.paste(vignette, (0, 0), vignette)
 
-        # Glow global
+        # Glow global (downscale → blur → upscale, cada 3 frames para performance)
         if effects.get("glow", False):
-            glow = frame.filter(ImageFilter.GaussianBlur(12))
-            from PIL import ImageEnhance
-            glow = ImageEnhance.Brightness(glow).enhance(1.2)
-            frame = Image.blend(frame, glow, 0.12)
+            frame_idx = int(t * self.fps)
+            if frame_idx % 3 == 0 or not hasattr(self, "_glow_cache"):
+                gw, gh = self.ancho // 4, self.alto // 4
+                small = frame.resize((gw, gh), Image.BILINEAR)
+                small = small.filter(ImageFilter.GaussianBlur(3))
+                self._glow_cache = small.resize(
+                    (self.ancho, self.alto), Image.BILINEAR)
+            frame = Image.blend(frame, self._glow_cache, 0.12)
 
         # Partículas
         if effects.get("particulas", False):

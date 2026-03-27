@@ -4,7 +4,7 @@ import customtkinter as ctk
 
 from app.config import (
     ACCENT, ACCENT_H, GOLD, DIM, CARD, INPUT_BG, DARK,
-    TAMANOS, ESQUEMAS_GUI, DURACIONES,
+    TAMANOS, ESQUEMAS_GUI, DURACIONES, WHISPER_MODELS,
     MODOS_VIDEO, ESTILOS_KINETIC, ESQUEMAS_KINETIC_GUI,
 )
 from app.i18n import t
@@ -99,7 +99,8 @@ class ConfigPanel(ctk.CTkFrame):
         _mini_dropdown(grid, t("config.size"), tamano_var, list(TAMANOS.keys()), all_inputs, 0, 0)
         _mini_dropdown(grid, "FPS", fps_var, ["24", "30", "60"], all_inputs, 0, 1)
         _mini_dropdown(grid, t("config.colors"), esquema_var, list(ESQUEMAS_GUI.keys()), all_inputs, 1, 0)
-        _mini_dropdown(grid, "Whisper", whisper_var, ["tiny", "base", "small", "medium"], all_inputs, 1, 1)
+        _mini_dropdown(grid, t("config.ai_precision"), whisper_var,
+                       list(WHISPER_MODELS.keys()), all_inputs, 1, 1)
         _mini_dropdown(grid, t("config.duration"), duracion_var, list(DURACIONES.keys()), all_inputs, 2, 0)
 
         if formato_var:

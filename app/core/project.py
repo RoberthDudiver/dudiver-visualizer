@@ -144,12 +144,35 @@ def find_dudi(folder):
 
 def get_project_config(app):
     """Extrae la configuración actual de la app como dict de proyecto."""
-    ts_path = None
     audio = app.audio_path.get()
-    if audio:
+
+    # Timing embebido directamente en el proyecto (sin archivo suelto)
+    timing_data = None
+    with app._data_lock:
+        if app._lineas and len(app._lineas) > 0:
+            timing_data = app._lineas
+    # Fallback: leer del JSON externo si existe (compat con proyectos viejos)
+    if not timing_data and audio:
         candidate = os.path.splitext(audio)[0] + "_timestamps.json"
         if os.path.isfile(candidate):
-            ts_path = candidate
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    timing_data = json.load(f)
+            except Exception:
+                pass
+
+    # Whisper raw data (palabras individuales) para Kinetic mode
+    whisper_raw = None
+    if audio:
+        whisper_file = os.path.splitext(audio)[0] + "_timestamps.json"
+        if os.path.isfile(whisper_file):
+            try:
+                with open(whisper_file, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict) and "palabras" in raw:
+                    whisper_raw = raw
+            except Exception:
+                pass
 
     return {
         "audio_path": audio,
@@ -163,7 +186,7 @@ def get_project_config(app):
         "tamano": app.tamano_var.get(),
         "fps": app.fps_var.get(),
         "esquema": app.esquema_var.get(),
-        "whisper_model": app.whisper_var.get(),
+        "whisper_model": app.whisper_var.get(),  # Label amigable (Normal/Alta/etc)
         "duracion": app.duracion_var.get(),
         "alpha": app.alpha_var.get(),
         "spot_enabled": app.spot_enabled.get(),
@@ -172,7 +195,9 @@ def get_project_config(app):
         "spot_subtext": app.spot_subtext.get(),
         "spot_file": app.spot_file.get(),
         "spot_duration": app.spot_duration.get(),
-        "timestamps_file": ts_path or "",
+        "timestamps_file": "",  # Ya no usamos archivo suelto
+        "timing_data": timing_data,  # Timing embebido en el proyecto
+        "whisper_raw": whisper_raw,  # Datos Whisper raw para Kinetic
         "lyrics_text": app.files_panel.letra_text.get("1.0", "end").strip(),
         # Efectos
         "efx_particulas": app.chk_particulas.get(),
@@ -214,7 +239,10 @@ def apply_project(app, config):
         if config.get("esquema"):
             app.esquema_var.set(config["esquema"])
         if config.get("whisper_model"):
-            app.whisper_var.set(config["whisper_model"])
+            wm = config["whisper_model"]
+            # Compat: proyectos viejos guardan "base"/"small" → convertir a label
+            from app.config import _WHISPER_REV
+            app.whisper_var.set(_WHISPER_REV.get(wm, wm))
         if config.get("duracion"):
             app.duracion_var.set(config["duracion"])
         if "alpha" in config:
@@ -229,6 +257,10 @@ def apply_project(app, config):
             app.spot_subtext.set(config["spot_subtext"])
         if config.get("spot_file"):
             app.spot_file.set(config["spot_file"])
+            # Recordar archivo para el tipo de spot actual
+            st = config.get("spot_type", "")
+            if st and hasattr(app, 'spot_panel'):
+                app.spot_panel.remember_file_for_type(st, config["spot_file"])
         if config.get("spot_duration"):
             app.spot_duration.set(config["spot_duration"])
 
@@ -262,14 +294,24 @@ def apply_project(app, config):
             app.files_panel.letra_text.delete("1.0", "end")
             app.files_panel.letra_text.insert("1.0", lyrics_text)
 
-        # Cargar timestamps si existen
-        ts_file = config.get("timestamps_file", "")
-        if ts_file and os.path.isfile(ts_file):
-            from app.core.timestamps import load_existing
-            lines = [l.strip() for l in lyrics_text.splitlines() if l.strip()]
-            timing = load_existing(ts_file, lines)
-            if timing:
-                app._lineas = timing
+        # Cargar timestamps embebidos en el proyecto
+        timing_data = config.get("timing_data")
+        if timing_data and isinstance(timing_data, list) and len(timing_data) > 0:
+            app._lineas = timing_data
+        else:
+            # Compat: cargar desde archivo externo si existe
+            ts_file = config.get("timestamps_file", "")
+            if ts_file and os.path.isfile(ts_file):
+                from app.core.timestamps import load_existing
+                lines = [l.strip() for l in lyrics_text.splitlines() if l.strip()]
+                timing = load_existing(ts_file, lines)
+                if timing:
+                    app._lineas = timing
+
+        # Guardar Whisper raw data para Kinetic mode
+        whisper_raw = config.get("whisper_raw")
+        if whisper_raw:
+            app._whisper_raw = whisper_raw
     finally:
         app._loading_project = False
 

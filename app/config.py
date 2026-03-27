@@ -1,17 +1,12 @@
 """
-Constantes globales, colores, esquemas, y setup de SKILLS_DIR.
+Constantes globales, colores, esquemas, y imports centralizados.
 Centraliza todas las imports de lyric_video / generar_timestamps.
 """
 
 import sys
 import os
 
-# ── Skills dir setup (lyric_video, generar_timestamps) ───────────────────────
-SKILLS_DIR = os.path.normpath("C:/Users/rober/.claude/skills/music/scripts")
-if SKILLS_DIR not in sys.path:
-    sys.path.insert(0, SKILLS_DIR)
-
-from lyric_video import (
+from app.scripts.lyric_video import (
     alinear_letra_con_whisper,
     cargar_timestamps_directos,
     crear_frame_normal,
@@ -20,7 +15,7 @@ from lyric_video import (
     cargar_fuente,
     ESQUEMAS,
 )
-from generar_timestamps import generar_timestamps as whisper_generar_timestamps
+from app.scripts.generar_timestamps import generar_timestamps as whisper_generar_timestamps
 
 # ── Theme colors ─────────────────────────────────────────────────────────────
 ACCENT = "#e94560"
@@ -56,6 +51,20 @@ DURACIONES = {
     "Completo": 0, "8 seg": 8, "15 seg": 15, "30 seg": 30, "1 min": 60,
     "1:30 min": 90, "2 min": 120, "3 min": 180,
 }
+# Whisper: display label → model name
+WHISPER_MODELS = {
+    "Rápida": "tiny",
+    "Normal": "base",
+    "Alta": "small",
+    "Máxima": "medium",
+}
+# Inverso para cargar proyectos guardados con nombre interno
+_WHISPER_REV = {v: k for k, v in WHISPER_MODELS.items()}
+
+
+def whisper_model_name(label):
+    """Convierte label de UI ('Normal') a nombre de modelo Whisper ('base')."""
+    return WHISPER_MODELS.get(label, label)
 
 # ── Modos de video ────────────────────────────────────────────────────────────
 MODOS_VIDEO = ["Karaoke", "Kinetic Typography"]

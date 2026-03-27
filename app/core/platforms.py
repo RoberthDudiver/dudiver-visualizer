@@ -41,9 +41,8 @@ def _hex_to_rgb(hex_color):
 
 def create_platform_icon(platform_key, size=64):
     """Carga el logo de la plataforma desde assets, o genera uno fallback."""
-    import os
-    assets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "assets")
+    from app.utils.paths import asset_path
+    assets_dir = asset_path("app", "assets")
     logo_path = os.path.join(assets_dir, f"{platform_key}.png")
 
     if os.path.isfile(logo_path):
@@ -65,10 +64,8 @@ def create_platform_icon(platform_key, size=64):
     draw.ellipse([margin, margin, size - margin, size - margin],
                  fill=bg + (255,), outline=color + (255,), width=2)
     cx, cy = size // 2, size // 2
-    try:
-        font = ImageFont.truetype("segoeuib.ttf", size // 3)
-    except Exception:
-        font = ImageFont.load_default()
+    from app.utils.fonts import load_pil_font
+    font, _ = load_pil_font("Segoe UI", size // 3, bold=True)
     symbol = {"spotify": "♪", "apple_music": "♪", "youtube_music": "▶",
               "amazon_music": "♫"}.get(platform_key, "★")
     draw.text((cx, cy), symbol, fill=color, font=font, anchor="mm")
@@ -137,17 +134,10 @@ def create_spot_with_platforms(ancho, alto, t_spot, spot_text, spot_subtext,
     c = int(255 * alpha)
 
     # Fonts
-    try:
-        font_big = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf",
-                                       max(28, int(ancho * 0.035)))
-        font_small = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf",
-                                         max(16, int(ancho * 0.02)))
-        font_label = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf",
-                                         max(12, int(ancho * 0.014)))
-    except Exception:
-        font_big = ImageFont.load_default()
-        font_small = font_big
-        font_label = font_big
+    from app.utils.fonts import load_pil_font
+    font_big, _ = load_pil_font("Segoe UI", max(28, int(ancho * 0.035)), bold=True)
+    font_small, _ = load_pil_font("Segoe UI", max(16, int(ancho * 0.02)))
+    font_label, _ = load_pil_font("Segoe UI", max(12, int(ancho * 0.014)))
 
     # Texto principal arriba
     y_text = int(alto * 0.08)

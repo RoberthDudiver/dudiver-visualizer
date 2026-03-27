@@ -19,8 +19,8 @@ class Toolbar(ctk.CTkFrame):
         self._anim_active = False
 
         # Logo icon al lado del nombre
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        png = os.path.join(base_dir, "icon.png")
+        from app.utils.paths import asset_path
+        png = asset_path("icon.png")
         if os.path.exists(png):
             logo_img = ctk.CTkImage(Image.open(png), size=(36, 36))
             ctk.CTkLabel(self, image=logo_img, text="").pack(side="left", padx=(12, 4))
