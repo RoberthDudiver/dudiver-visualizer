@@ -185,7 +185,8 @@ class VideoGenerator:
             else:
                 frame = Image.new("RGBA", (ancho, alto), (0, 0, 0, 255))
                 spot_f = create_spot_frame(ancho, alto, t - duracion,
-                                           spot_type, spot_text, spot_subtext, spot_file)
+                                           spot_type, spot_text, spot_subtext, spot_file,
+                                           platform_urls=cfg.get("platform_urls"))
                 frame.paste(spot_f)
 
             frame.save(os.path.join(temp_dir, f"f_{fn:06d}.png"), "PNG")
@@ -239,7 +240,8 @@ class VideoGenerator:
 
             if t >= duracion and spot_on:
                 img = create_spot_frame(ancho, alto, t - duracion,
-                                        spot_type, spot_text, spot_subtext, spot_file)
+                                        spot_type, spot_text, spot_subtext, spot_file,
+                                        platform_urls=cfg.get("platform_urls"))
                 return np.array(img)
 
             cur_bg = bg_image
@@ -343,6 +345,15 @@ class VideoGenerator:
                 "alpha_mode": cfg.get("alpha_mode", False),
                 "fondo_path": cfg.get("fondo_path", None),
                 "effects": cfg.get("effects"),
+                "max_dur": cfg.get("max_dur", 0),
+                "spot_on": cfg.get("spot_on", False),
+                "spot_type": cfg.get("spot_type", "Texto"),
+                "spot_text": cfg.get("spot_text", ""),
+                "spot_subtext": cfg.get("spot_subtext", ""),
+                "spot_file": cfg.get("spot_file", ""),
+                "spot_secs": cfg.get("spot_secs", 5),
+                "start_time": cfg.get("start_time", 0),
+                "platform_urls": cfg.get("platform_urls"),
             }
 
             self.on_log(f"Fuente: {pil_config['fuente']}")

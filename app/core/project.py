@@ -1,77 +1,145 @@
-"""Sistema de proyectos — guardar/cargar estado completo del workspace."""
+"""Sistema de proyectos .dudi — archivo único con todo embebido.
+
+Un .dudi es un ZIP renombrado que contiene:
+  - project.json  (configuración)
+  - audio.*       (archivo de audio)
+  - fondo.*       (imagen/video de fondo)
+  - timestamps.json (timestamps de Whisper)
+  - spot.*        (archivo del spot publicitario)
+"""
 
 import json
 import os
 import shutil
+import tempfile
+import zipfile
 
 
-PROJECT_FILE = "dudiver_project.json"
+DUDI_EXT = ".dudi"
+# Carpeta temporal donde se extraen los archivos del proyecto activo
+_EXTRACT_DIR = os.path.join(tempfile.gettempdir(), "dudiver_project")
 
 
-def save_project(folder, config):
-    """Guarda el estado del proyecto en una carpeta.
+def save_dudi(dudi_path, config):
+    """Guarda todo en un solo archivo .dudi (ZIP).
 
-    config: dict con todas las variables del proyecto:
-        audio_path, letra_path, fondo_path, titulo, modo, estilo_kinetic,
-        fuente, font_size, tamano, fps, esquema, whisper_model, duracion,
-        alpha, spot_enabled, spot_type, spot_text, spot_subtext, spot_file,
-        spot_duration, timestamps_file
+    config: dict con rutas absolutas a archivos y settings.
     """
-    os.makedirs(folder, exist_ok=True)
-    project_path = os.path.join(folder, PROJECT_FILE)
+    data = dict(config)
+    embedded = {}
 
-    # Copiar archivos al proyecto si no están allí
-    for key in ("audio_path", "letra_path", "fondo_path", "spot_file"):
-        src = config.get(key, "")
+    # Embeber archivos
+    for key in ("audio_path", "letra_path", "fondo_path", "spot_file",
+                "timestamps_file"):
+        src = data.get(key, "")
         if src and os.path.isfile(src):
-            dst = os.path.join(folder, os.path.basename(src))
-            if os.path.abspath(src) != os.path.abspath(dst):
-                shutil.copy2(src, dst)
-            config[key] = os.path.basename(src)
+            arc_name = f"{key}_{os.path.basename(src)}"
+            embedded[key] = (src, arc_name)
+            data[key] = arc_name
+        else:
+            data[key] = ""
 
-    # Copiar timestamps si existen
-    ts = config.get("timestamps_file", "")
-    if ts and os.path.isfile(ts):
-        dst = os.path.join(folder, os.path.basename(ts))
-        if os.path.abspath(ts) != os.path.abspath(dst):
-            shutil.copy2(ts, dst)
-        config["timestamps_file"] = os.path.basename(ts)
+    with zipfile.ZipFile(dudi_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Escribir config
+        zf.writestr("project.json", json.dumps(data, ensure_ascii=False, indent=2))
+        # Escribir archivos
+        for key, (src, arc_name) in embedded.items():
+            zf.write(src, arc_name)
 
-    with open(project_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-
-    return project_path
+    return dudi_path
 
 
-def load_project(project_path):
-    """Carga un proyecto y resuelve rutas relativas.
+def load_dudi(dudi_path):
+    """Carga un .dudi: extrae archivos a temp y retorna config con rutas absolutas."""
+    # Limpiar extracción anterior
+    if os.path.isdir(_EXTRACT_DIR):
+        shutil.rmtree(_EXTRACT_DIR, ignore_errors=True)
+    os.makedirs(_EXTRACT_DIR, exist_ok=True)
 
-    Returns dict con rutas absolutas.
-    """
-    with open(project_path, "r", encoding="utf-8") as f:
+    with zipfile.ZipFile(dudi_path, "r") as zf:
+        zf.extractall(_EXTRACT_DIR)
+
+    config_path = os.path.join(_EXTRACT_DIR, "project.json")
+    with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    folder = os.path.dirname(os.path.abspath(project_path))
-
-    # Resolver rutas relativas
-    for key in ("audio_path", "letra_path", "fondo_path", "spot_file", "timestamps_file"):
+    # Resolver rutas a archivos extraídos
+    for key in ("audio_path", "letra_path", "fondo_path", "spot_file",
+                "timestamps_file"):
         val = config.get(key, "")
-        if val and not os.path.isabs(val):
-            abs_path = os.path.join(folder, val)
+        if val:
+            abs_path = os.path.join(_EXTRACT_DIR, val)
             if os.path.isfile(abs_path):
                 config[key] = abs_path
-            # Si no existe, dejar como está
+            else:
+                config[key] = ""
 
-    config["_project_folder"] = folder
+    config["_dudi_path"] = dudi_path
+    config["_project_folder"] = _EXTRACT_DIR
     return config
 
 
-def find_project(folder):
-    """Busca un archivo de proyecto en la carpeta. Retorna ruta o None."""
+def save_dudi_quick(dudi_path, config):
+    """Auto-save rápido: solo actualiza project.json dentro del .dudi.
+
+    Si el .dudi no existe aún, hace save completo.
+    """
+    if not os.path.isfile(dudi_path):
+        return save_dudi(dudi_path, config)
+
+    data = dict(config)
+
+    # Convertir rutas absolutas de archivos extraídos a nombres internos del zip
+    try:
+        with zipfile.ZipFile(dudi_path, "r") as zf:
+            existing = zf.namelist()
+    except Exception:
+        return save_dudi(dudi_path, config)
+
+    for key in ("audio_path", "letra_path", "fondo_path", "spot_file",
+                "timestamps_file"):
+        src = data.get(key, "")
+        if src:
+            basename = os.path.basename(src)
+            # Buscar en el zip por el nombre del archivo
+            match = None
+            for name in existing:
+                if name.endswith(basename):
+                    match = name
+                    break
+            if match:
+                data[key] = match
+            elif os.path.isfile(src):
+                # Archivo nuevo que no estaba en el zip — rebuild completo
+                return save_dudi(dudi_path, config)
+            else:
+                data[key] = ""
+
+    # Reescribir solo el project.json
+    # zipfile no permite actualizar in-place, hay que reconstruir
+    tmp_path = dudi_path + ".tmp"
+    with zipfile.ZipFile(dudi_path, "r") as zf_in:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf_out:
+            for item in zf_in.infolist():
+                if item.filename == "project.json":
+                    zf_out.writestr("project.json",
+                                    json.dumps(data, ensure_ascii=False, indent=2))
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+
+    # Reemplazar original
+    os.replace(tmp_path, dudi_path)
+    return dudi_path
+
+
+def find_dudi(folder):
+    """Busca un archivo .dudi en la carpeta. Retorna ruta o None."""
     if not folder or not os.path.isdir(folder):
         return None
-    path = os.path.join(folder, PROJECT_FILE)
-    return path if os.path.isfile(path) else None
+    for f in os.listdir(folder):
+        if f.lower().endswith(DUDI_EXT):
+            return os.path.join(folder, f)
+    return None
 
 
 def get_project_config(app):
@@ -113,77 +181,123 @@ def get_project_config(app):
         "efx_glow": app.chk_glow.get(),
         "efx_barra": app.chk_barra.get(),
         "formato": app.formato_var.get(),
+        # Plataformas
+        "platforms": {k: v.get() for k, v in app.platform_vars.items()},
     }
 
 
 def apply_project(app, config):
     """Aplica la configuración de un proyecto a la app."""
-    if config.get("audio_path"):
-        app.audio_path.set(config["audio_path"])
-    if config.get("letra_path"):
-        app.letra_path.set(config["letra_path"])
-    if config.get("fondo_path"):
-        app.fondo_path.set(config["fondo_path"])
-    if config.get("titulo"):
-        app.titulo_var.set(config["titulo"])
-    if config.get("modo"):
-        app.modo_var.set(config["modo"])
-    if config.get("estilo_kinetic"):
-        app.estilo_kinetic_var.set(config["estilo_kinetic"])
-    if config.get("fuente"):
-        app.fuente_var.set(config["fuente"])
-    if config.get("font_size"):
-        app.font_size_var.set(int(config["font_size"]))
-    if config.get("tamano"):
-        app.tamano_var.set(config["tamano"])
-    if config.get("fps"):
-        app.fps_var.set(str(config["fps"]))
-    if config.get("esquema"):
-        app.esquema_var.set(config["esquema"])
-    if config.get("whisper_model"):
-        app.whisper_var.set(config["whisper_model"])
-    if config.get("duracion"):
-        app.duracion_var.set(config["duracion"])
-    if "alpha" in config:
-        app.alpha_var.set(config["alpha"])
-    if "spot_enabled" in config:
-        app.spot_enabled.set(config["spot_enabled"])
-    if config.get("spot_type"):
-        app.spot_type.set(config["spot_type"])
-    if config.get("spot_text"):
-        app.spot_text.set(config["spot_text"])
-    if config.get("spot_subtext"):
-        app.spot_subtext.set(config["spot_subtext"])
-    if config.get("spot_file"):
-        app.spot_file.set(config["spot_file"])
-    if config.get("spot_duration"):
-        app.spot_duration.set(config["spot_duration"])
+    # Desactivar auto-save temporalmente para no disparar saves en cascada
+    app._loading_project = True
+    try:
+        if config.get("audio_path"):
+            app.audio_path.set(config["audio_path"])
+        if config.get("letra_path"):
+            app.letra_path.set(config["letra_path"])
+        if config.get("fondo_path"):
+            app.fondo_path.set(config["fondo_path"])
+        if config.get("titulo"):
+            app.titulo_var.set(config["titulo"])
+        if config.get("modo"):
+            app.modo_var.set(config["modo"])
+        if config.get("estilo_kinetic"):
+            app.estilo_kinetic_var.set(config["estilo_kinetic"])
+        if config.get("fuente"):
+            app.fuente_var.set(config["fuente"])
+        if config.get("font_size"):
+            app.font_size_var.set(int(config["font_size"]))
+        if config.get("tamano"):
+            app.tamano_var.set(config["tamano"])
+        if config.get("fps"):
+            app.fps_var.set(str(config["fps"]))
+        if config.get("esquema"):
+            app.esquema_var.set(config["esquema"])
+        if config.get("whisper_model"):
+            app.whisper_var.set(config["whisper_model"])
+        if config.get("duracion"):
+            app.duracion_var.set(config["duracion"])
+        if "alpha" in config:
+            app.alpha_var.set(config["alpha"])
+        if "spot_enabled" in config:
+            app.spot_enabled.set(config["spot_enabled"])
+        if config.get("spot_type"):
+            app.spot_type.set(config["spot_type"])
+        if config.get("spot_text"):
+            app.spot_text.set(config["spot_text"])
+        if config.get("spot_subtext"):
+            app.spot_subtext.set(config["spot_subtext"])
+        if config.get("spot_file"):
+            app.spot_file.set(config["spot_file"])
+        if config.get("spot_duration"):
+            app.spot_duration.set(config["spot_duration"])
 
-    # Efectos
-    if "efx_particulas" in config:
-        app.chk_particulas.set(config["efx_particulas"])
-    if "efx_onda" in config:
-        app.chk_onda.set(config["efx_onda"])
-    if "efx_vineta" in config:
-        app.chk_vineta.set(config["efx_vineta"])
-    if "efx_glow" in config:
-        app.chk_glow.set(config["efx_glow"])
-    if "efx_barra" in config:
-        app.chk_barra.set(config["efx_barra"])
-    if config.get("formato"):
-        app.formato_var.set(config["formato"])
+        # Efectos
+        if "efx_particulas" in config:
+            app.chk_particulas.set(config["efx_particulas"])
+        if "efx_onda" in config:
+            app.chk_onda.set(config["efx_onda"])
+        if "efx_vineta" in config:
+            app.chk_vineta.set(config["efx_vineta"])
+        if "efx_glow" in config:
+            app.chk_glow.set(config["efx_glow"])
+        if "efx_barra" in config:
+            app.chk_barra.set(config["efx_barra"])
+        if config.get("formato"):
+            app.formato_var.set(config["formato"])
 
-    # Cargar letra
-    lyrics_text = config.get("lyrics_text", "")
-    if lyrics_text:
-        app.files_panel.letra_text.delete("1.0", "end")
-        app.files_panel.letra_text.insert("1.0", lyrics_text)
+        # Plataformas
+        platforms = config.get("platforms", {})
+        for k, v in platforms.items():
+            var = app.platform_vars.get(k)
+            if var:
+                if isinstance(v, bool):
+                    var.set(v)
+                else:
+                    var.set(v)
 
-    # Cargar timestamps si existen
-    ts_file = config.get("timestamps_file", "")
-    if ts_file and os.path.isfile(ts_file):
-        from app.core.timestamps import load_existing
-        lines = [l.strip() for l in lyrics_text.splitlines() if l.strip()]
-        timing = load_existing(ts_file, lines)
-        if timing:
-            app._lineas = timing
+        # Cargar letra
+        lyrics_text = config.get("lyrics_text", "")
+        if lyrics_text:
+            app.files_panel.letra_text.delete("1.0", "end")
+            app.files_panel.letra_text.insert("1.0", lyrics_text)
+
+        # Cargar timestamps si existen
+        ts_file = config.get("timestamps_file", "")
+        if ts_file and os.path.isfile(ts_file):
+            from app.core.timestamps import load_existing
+            lines = [l.strip() for l in lyrics_text.splitlines() if l.strip()]
+            timing = load_existing(ts_file, lines)
+            if timing:
+                app._lineas = timing
+    finally:
+        app._loading_project = False
+
+
+# ── Compatibilidad con formato viejo (dudiver_project.json) ──
+
+def find_project_legacy(folder):
+    """Busca un dudiver_project.json viejo en la carpeta."""
+    if not folder or not os.path.isdir(folder):
+        return None
+    path = os.path.join(folder, "dudiver_project.json")
+    return path if os.path.isfile(path) else None
+
+
+def load_project_legacy(project_path):
+    """Carga un proyecto viejo (JSON suelto) y resuelve rutas."""
+    with open(project_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    folder = os.path.dirname(os.path.abspath(project_path))
+
+    for key in ("audio_path", "letra_path", "fondo_path", "spot_file",
+                "timestamps_file"):
+        val = config.get(key, "")
+        if val and not os.path.isabs(val):
+            abs_path = os.path.join(folder, val)
+            if os.path.isfile(abs_path):
+                config[key] = abs_path
+
+    config["_project_folder"] = folder
+    return config

@@ -35,9 +35,60 @@ from app.ui.sync_editor import SyncEditorWindow
 from app.ui.help_window import HelpWindow
 from app.i18n import t
 from app.core.project import (
-    save_project, load_project, find_project,
+    save_dudi, load_dudi, save_dudi_quick, find_dudi,
     get_project_config, apply_project,
+    find_project_legacy, load_project_legacy,
 )
+
+
+def _render_subprocess(config):
+    """Top-level function for multiprocessing — renders video in separate process."""
+    import os
+    import sys
+    import traceback
+
+    progress_file = config.pop("_progress_file", None)
+
+    # Recrear fonts PIL desde info serializable
+    font_name = config.pop("_font_name", None)
+    font_size_base = config.pop("_font_size_base", 40)
+
+    from app.utils.fonts import adapted_fonts
+    lines = config.get("lines", [])
+    ancho = config.get("ancho", 1920)
+    alto = config.get("alto", 1080)
+    fuente, fuente_titulo, fuente_peq, _ = adapted_fonts(
+        font_size_base, ancho, alto, lines, font_name=font_name)
+    config["fuente"] = fuente
+    config["fuente_titulo"] = fuente_titulo
+    config["fuente_peq"] = fuente_peq
+
+    def on_progress(msg, pct):
+        if progress_file:
+            try:
+                with open(progress_file, "w") as f:
+                    f.write(f"{pct}|{msg}")
+            except Exception:
+                pass
+
+    def on_log(msg):
+        pass  # Logs no van al UI desde el subprocess
+
+    try:
+        from app.core.video import VideoGenerator
+        gen = VideoGenerator(
+            config,
+            on_progress=on_progress,
+            on_log=on_log,
+            is_cancelled=lambda: False,  # cancel via terminate()
+        )
+        gen.run()
+    except Exception:
+        # Guardar error para que el proceso padre lo lea
+        err_log = config.get("output_path", "output") + ".error.log"
+        with open(err_log, "w") as f:
+            traceback.print_exc(file=f)
+        sys.exit(1)
 
 
 class VisualizerApp(ctk.CTk):
@@ -113,6 +164,12 @@ class VisualizerApp(ctk.CTk):
         self.spot_text = ctk.StringVar(value="Escuchala en todas las plataformas")
         self.spot_subtext = ctk.StringVar(value="@dudiver")
         self.spot_duration = ctk.StringVar(value="5 seg")
+
+        # Plataformas de streaming
+        self.platform_vars = {}
+        for key in ("spotify", "apple_music", "youtube_music", "amazon_music", "custom"):
+            self.platform_vars[f"{key}_enabled"] = ctk.BooleanVar(value=False)
+            self.platform_vars[f"{key}_url"] = ctk.StringVar(value="")
 
         self.formato_var = ctk.StringVar(value="MP4")
         self.preview_time = ctk.DoubleVar(value=0.0)
@@ -203,6 +260,7 @@ class VisualizerApp(ctk.CTk):
                                     spot_text=self.spot_text,
                                     spot_subtext=self.spot_subtext,
                                     spot_duration=self.spot_duration,
+                                    platform_vars=self.platform_vars,
                                     all_inputs=self._all_inputs)
         self.spot_panel.pack(fill="x")
 
@@ -223,16 +281,27 @@ class VisualizerApp(ctk.CTk):
                                           on_time_change=self._on_time_change)
         self.preview_panel.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
 
-        # Watchers — auto-preview al cambiar configuración
+        # Watchers — auto-preview + auto-save al cambiar configuración
         self.audio_path.trace_add("write", self._on_audio_change)
         for var in [self.modo_var, self.fuente_var, self.estilo_kinetic_var,
                     self.esquema_var, self.font_size_var, self.tamano_var,
                     self.fps_var, self.duracion_var, self.alpha_var,
                     self.fondo_path, self.titulo_var,
                     self.chk_particulas, self.chk_onda, self.chk_vineta,
-                    self.chk_glow, self.chk_barra]:
+                    self.chk_glow, self.chk_barra,
+                    self.spot_enabled, self.spot_type, self.spot_text,
+                    self.spot_subtext, self.spot_duration, self.formato_var,
+                    *self.platform_vars.values()]:
             var.trace_add("write", self._auto_preview)
+            var.trace_add("write", self._auto_save_project)
+        self.audio_path.trace_add("write", self._auto_save_project)
+        self.fondo_path.trace_add("write", self._auto_save_project)
+        self.spot_file.trace_add("write", self._auto_save_project)
         self._preview_pending = None
+        self._save_pending = None
+        self._dudi_path = None  # Ruta al .dudi activo
+        self._loading_project = False
+        self.duracion_var.trace_add("write", self._on_duration_change)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -240,7 +309,23 @@ class VisualizerApp(ctk.CTk):
         return TAMANOS.get(self.tamano_var.get(), (1920, 1080))
 
     def _max_duration(self):
-        return DURACIONES.get(self.duracion_var.get(), 0)
+        """Retorna duración del clip basada en rango Desde/Hasta."""
+        start, end = self.preview_panel.get_range()
+        if end > start:
+            return end - start
+        return 0  # Completo
+
+    def _start_time(self):
+        start, end = self.preview_panel.get_range()
+        return start if end > start else 0
+
+    def _on_duration_change(self, *_):
+        dur = DURACIONES.get(self.duracion_var.get(), 0)
+        if dur > 0:
+            audio_dur = getattr(self, '_dur', 300) or 300
+            self.preview_panel.show_range(dur, audio_dur)
+        else:
+            self.preview_panel.hide_range()
 
     def _lyrics(self):
         text = self.files_panel.letra_text.get("1.0", "end").strip()
@@ -270,6 +355,16 @@ class VisualizerApp(ctk.CTk):
 
     def _spot_seconds(self):
         return int(self.spot_duration.get().split()[0])
+
+    def _active_platform_urls(self):
+        """Retorna dict de plataformas activas {key: url}."""
+        urls = {}
+        for key in ("spotify", "apple_music", "youtube_music", "amazon_music", "custom"):
+            enabled = self.platform_vars.get(f"{key}_enabled")
+            url_var = self.platform_vars.get(f"{key}_url")
+            if enabled and enabled.get() and url_var and url_var.get().strip():
+                urls[key] = url_var.get().strip()
+        return urls
 
     def _ensure_timing(self, lines):
         if self._lineas and len(self._lineas) > 0:
@@ -324,14 +419,30 @@ class VisualizerApp(ctk.CTk):
     # ── Events ──────────────────────────────────────────────────────────────
 
     def _on_time_change(self, val):
-        m, s = divmod(int(val), 60)
+        m, s = divmod(int(float(val)), 60)
         self.preview_panel.time_label.configure(text=f"{m}:{s:02d}")
+        # Reproducir audio al mover slider
+        self.preview_panel.play_audio_at(float(val))
+        # Preview con debounce (no en cada pixel del slider)
+        self._auto_preview()
 
     def _on_audio_change(self, *_):
         p = self.audio_path.get()
         if p and os.path.isfile(p):
             self.preview_panel.info_label.configure(text=f"\U0001f3b5 {short_path(p, 50)}")
-            if not self.titulo_var.get().strip():
+            # Auto-cargar proyecto .dudi si existe en la carpeta del audio
+            folder = os.path.dirname(p)
+            dudi = find_dudi(folder)
+            if dudi:
+                try:
+                    config = load_dudi(dudi)
+                    self._dudi_path = dudi
+                    apply_project(self, config)
+                    name = os.path.splitext(os.path.basename(dudi))[0]
+                    self._log(f"Proyecto cargado: {name}")
+                except Exception:
+                    pass
+            elif not self.titulo_var.get().strip():
                 name = os.path.splitext(os.path.basename(p))[0]
                 name = re.sub(r'\s*\((?:Remastered|Master|Final|Mix|v\d+)\)', '', name, flags=re.IGNORECASE)
                 name = re.sub(r'[-_]\d+$', '', name)
@@ -390,6 +501,35 @@ class VisualizerApp(ctk.CTk):
     # ══════════════════════════════════════════════════════════════════════════
     #  PREVIEW
     # ══════════════════════════════════════════════════════════════════════════
+
+    def _auto_save_project(self, *_):
+        """Auto-guarda el proyecto con debounce de 1s."""
+        if getattr(self, '_loading_project', False):
+            return
+        if self._save_pending:
+            self.after_cancel(self._save_pending)
+        self._save_pending = self.after(1000, self._do_auto_save)
+
+    def _do_auto_save(self):
+        """Guarda el proyecto al .dudi activo."""
+        if not self._dudi_path:
+            # Si no hay .dudi activo, crear uno en la carpeta del audio
+            audio = self.audio_path.get()
+            if not audio or not os.path.isfile(audio):
+                return
+            titulo = self.titulo_var.get().strip() or "proyecto"
+            safe = "".join(c if (c.isalnum() or c in " _-") else "_" for c in titulo).strip()
+            self._dudi_path = os.path.join(os.path.dirname(audio), f"{safe}.dudi")
+        try:
+            config = get_project_config(self)
+            save_dudi_quick(self._dudi_path, config)
+        except Exception as e:
+            # Si quick save falla, intentar save completo
+            try:
+                config = get_project_config(self)
+                save_dudi(self._dudi_path, config)
+            except Exception:
+                pass
 
     def _auto_preview(self, *_):
         """Dispara preview automático con debounce de 300ms."""
@@ -477,8 +617,6 @@ class VisualizerApp(ctk.CTk):
                 fondo_path=self.fondo_path.get())
 
         self._show_preview_image(img, ancho, alto)
-        # Reproducir audio desde la posición actual del slider
-        self.preview_panel.play_audio_at(t)
 
     def _load_palabras_whisper(self):
         """Carga palabras individuales del JSON de Whisper si existe."""
@@ -562,6 +700,9 @@ class VisualizerApp(ctk.CTk):
         estilo_val = ESTILOS_KINETIC.get(estilo, "wave")
 
         if estilo_val == "oneword" and palabras:
+            # Agrupar palabras cortas inteligentemente
+            from app.core.kinetic_pil import group_smart_oneword
+            palabras = group_smart_oneword(palabras)
             self._draw_kinetic_oneword(draw, palabras, t, ancho, alto,
                                        font_path, font_size, color_activo,
                                        glow_color)
@@ -913,6 +1054,7 @@ class VisualizerApp(ctk.CTk):
 
         self._custom_output = output
         self._cancel = False
+        self._render_proc = None  # multiprocessing.Process
         self._disable_ui()
         self._set_status("\u27f3 Preparando...", 1)
         self._worker = threading.Thread(target=self._gen_worker, args=(lines,), daemon=True)
@@ -955,17 +1097,19 @@ class VisualizerApp(ctk.CTk):
             "fondo_path": self.fondo_path.get(),
             "output_path": getattr(self, '_custom_output', self._output_path()),
             "max_dur": self._max_duration(),
+            "start_time": self._start_time(),
             "timing": timing,
             "lines": lines,
-            "fuente": fuente,
-            "fuente_titulo": fuente_titulo,
-            "fuente_peq": fuente_peq,
+            # Fonts como info serializable (se recrean en subprocess)
+            "_font_name": self.fuente_var.get(),
+            "_font_size_base": self.font_size_var.get(),
             "spot_on": self.spot_enabled.get(),
             "spot_type": self.spot_type.get(),
             "spot_text": self.spot_text.get(),
             "spot_subtext": self.spot_subtext.get(),
             "spot_file": self.spot_file.get(),
             "spot_secs": self._spot_seconds(),
+            "platform_urls": self._active_platform_urls(),
             # Kinetic
             "modo": self.modo_var.get(),
             "estilo_kinetic": estilo_k,
@@ -982,35 +1126,101 @@ class VisualizerApp(ctk.CTk):
             },
         }
 
-        def on_progress(msg, pct):
-            self._set_status(f"\u27f3 {msg}", pct)
+        import multiprocessing
+        import time as _time
 
-        gen = VideoGenerator(
-            config,
-            on_progress=on_progress,
-            on_log=self._log,
-            is_cancelled=lambda: self._cancel,
-        )
-        gen.run()
+        # Crear pipes para comunicación
+        progress_file = os.path.join(os.path.dirname(config["output_path"]),
+                                      ".render_progress.txt")
+        config["_progress_file"] = progress_file
 
-        # Update timeline with actual duration if available
-        if self._dur > 0:
-            m, s = divmod(int(self._dur), 60)
-            self.after(0, lambda: self.preview_panel.timeline.configure(to=self._dur))
-            self.after(0, lambda: self.preview_panel.dur_label.configure(text=f"/ {m}:{s:02d}"))
+        # Lanzar en proceso separado (se puede matar)
+        self._render_proc = multiprocessing.Process(
+            target=_render_subprocess, args=(config,), daemon=True)
+        self._render_proc.start()
+        self._log(f"Proceso de render iniciado (PID: {self._render_proc.pid})")
 
-        # Cargar video generado en el tab Video
-        out_path = config.get("output_path", "")
-        if out_path and os.path.isfile(out_path):
-            self.after(0, lambda: self.preview_panel.load_video(out_path))
-            self._log(f"Video cargado en reproductor")
+        # Monitorear progreso
+        last_pct = 0
+        while self._render_proc.is_alive():
+            if self._cancel:
+                self._render_proc.terminate()
+                self._render_proc.join(timeout=3)
+                if self._render_proc.is_alive():
+                    self._render_proc.kill()
+                self._log("✗ Render cancelado")
+                self._set_status("Cancelado", 0)
+                self._enable_ui()
+                # Limpiar archivo parcial
+                out = config.get("output_path", "")
+                if out and os.path.isfile(out):
+                    try:
+                        os.remove(out)
+                    except Exception:
+                        pass
+                return
+            # Leer progreso del archivo
+            try:
+                if os.path.isfile(progress_file):
+                    with open(progress_file, "r") as f:
+                        line = f.read().strip()
+                    if line:
+                        parts = line.split("|", 1)
+                        pct = int(parts[0])
+                        msg = parts[1] if len(parts) > 1 else "Renderizando..."
+                        if pct != last_pct:
+                            self._set_status(f"\u27f3 {msg}", pct)
+                            last_pct = pct
+            except Exception:
+                pass
+            _time.sleep(0.3)
+
+        # Proceso terminó — verificar éxito
+        exit_code = self._render_proc.exitcode
+        self._render_proc = None
+
+        # Limpiar archivo de progreso
+        try:
+            if os.path.isfile(progress_file):
+                os.remove(progress_file)
+        except Exception:
+            pass
+
+        if exit_code == 0:
+            # Update timeline
+            if self._dur > 0:
+                m, s = divmod(int(self._dur), 60)
+                self.after(0, lambda: self.preview_panel.timeline.configure(
+                    to=self._dur))
+                self.after(0, lambda: self.preview_panel.dur_label.configure(
+                    text=f"/ {m}:{s:02d}"))
+
+            # Cargar video generado
+            out_path = config.get("output_path", "")
+            if out_path and os.path.isfile(out_path):
+                self.after(0, lambda: self.preview_panel.load_video(out_path))
+                self._log(f"✓ Video generado: {os.path.basename(out_path)}")
+        else:
+            self._log(f"✗ Error en render (código: {exit_code})")
+            # Revisar si hay log de error
+            err_log = config.get("output_path", "") + ".error.log"
+            if os.path.isfile(err_log):
+                try:
+                    with open(err_log, "r") as f:
+                        self._log(f.read()[:500])
+                except Exception:
+                    pass
 
         self._enable_ui()
 
     def _do_cancel(self):
         self._cancel = True
+        # Matar proceso inmediatamente
+        proc = getattr(self, '_render_proc', None)
+        if proc and proc.is_alive():
+            proc.terminate()
+            self._log("Matando proceso de render...")
         self._set_status("\u27f3 Cancelando...", None)
-        self._log("Cancelando...")
 
     def _open_folder(self):
         out = self._output_path()
@@ -1049,31 +1259,43 @@ class VisualizerApp(ctk.CTk):
         from tkinter import filedialog
         audio = self.audio_path.get()
         initial = os.path.dirname(audio) if audio else os.path.expanduser("~/Desktop")
-        folder = filedialog.askdirectory(
-            title=t("project.select_folder"),
+        titulo = self.titulo_var.get().strip() or "proyecto"
+        safe = "".join(c if (c.isalnum() or c in " _-") else "_" for c in titulo).strip()
+        path = filedialog.asksaveasfilename(
+            title="Guardar proyecto .dudi",
             initialdir=initial,
+            initialfile=f"{safe}.dudi",
+            defaultextension=".dudi",
+            filetypes=[("Dudiver Project", "*.dudi")],
         )
-        if not folder:
+        if not path:
             return
         config = get_project_config(self)
-        path = save_project(folder, config)
-        self._log(t("project.saved", path=path))
-        messagebox.showinfo(t("project.save"), t("project.saved", path=path))
+        save_dudi(path, config)
+        self._dudi_path = path
+        self._log(f"Proyecto guardado: {os.path.basename(path)}")
+        messagebox.showinfo("Proyecto", f"Guardado: {os.path.basename(path)}")
 
     def _open_project(self):
         from tkinter import filedialog
         path = filedialog.askopenfilename(
-            title=t("project.select_file"),
-            filetypes=[("Dudiver Project", "dudiver_project.json"),
+            title="Abrir proyecto",
+            filetypes=[("Dudiver Project", "*.dudi"),
+                       ("Legacy Project", "dudiver_project.json"),
                        (t("files.all"), "*.*")],
         )
         if not path:
             return
         try:
-            config = load_project(path)
+            if path.lower().endswith(".dudi"):
+                config = load_dudi(path)
+                self._dudi_path = path
+            else:
+                config = load_project_legacy(path)
+                self._dudi_path = None
             apply_project(self, config)
-            name = os.path.basename(os.path.dirname(path))
-            self._log(t("project.loaded", name=name))
+            name = os.path.splitext(os.path.basename(path))[0]
+            self._log(f"Proyecto cargado: {name}")
             self._auto_preview()
         except Exception as ex:
             messagebox.showerror("Error", str(ex))

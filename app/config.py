@@ -53,8 +53,8 @@ ESQUEMA_GUI_TO_KINETIC = {
     "Oro": "elegante",
 }
 DURACIONES = {
-    "Completo": 0, "30 seg": 30, "1 min": 60, "1:30 min": 90,
-    "2 min": 120, "3 min": 180,
+    "Completo": 0, "8 seg": 8, "15 seg": 15, "30 seg": 30, "1 min": 60,
+    "1:30 min": 90, "2 min": 120, "3 min": 180,
 }
 
 # ── Modos de video ────────────────────────────────────────────────────────────

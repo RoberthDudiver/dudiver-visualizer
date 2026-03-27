@@ -1,4 +1,4 @@
-"""Panel de spot publicitario."""
+"""Panel de spot publicitario con plataformas de streaming."""
 
 import os
 import customtkinter as ctk
@@ -9,9 +9,20 @@ from app.i18n import t
 from app.ui.components import create_section, short_path
 
 
+# Plataformas disponibles
+PLATFORM_DEFS = [
+    ("spotify", "Spotify", "#1DB954"),
+    ("apple_music", "Apple Music", "#FC3C44"),
+    ("youtube_music", "YouTube Music", "#FF0000"),
+    ("amazon_music", "Amazon Music", "#25D1DA"),
+    ("custom", "Custom", "#FFFFFF"),
+]
+
+
 class SpotPanel(ctk.CTkFrame):
     def __init__(self, parent, *, spot_enabled, spot_type, spot_file,
-                 spot_text, spot_subtext, spot_duration, all_inputs):
+                 spot_text, spot_subtext, spot_duration,
+                 platform_vars=None, all_inputs):
         super().__init__(parent, fg_color="transparent", corner_radius=0)
 
         self._spot_enabled = spot_enabled
@@ -65,7 +76,6 @@ class SpotPanel(ctk.CTkFrame):
 
         # Archivo spot (imagen/video)
         self.spot_file_frame = ctk.CTkFrame(self.spot_frame, fg_color="transparent")
-        # No pack yet — shown when tipo=Imagen or Video
 
         sf_file = ctk.CTkFrame(self.spot_file_frame, fg_color="transparent")
         sf_file.pack(fill="x", pady=2)
@@ -77,6 +87,41 @@ class SpotPanel(ctk.CTkFrame):
         ctk.CTkButton(sf_file, text="...", width=32, height=28,
                       fg_color=INPUT_BG, hover_color=ACCENT,
                       command=self._pick_spot_file).pack(side="right")
+
+        # ── Plataformas de streaming ──
+        create_section(self.spot_frame, "Plataformas")
+        plat_card = ctk.CTkFrame(self.spot_frame, fg_color=INPUT_BG, corner_radius=8)
+        plat_card.pack(fill="x", pady=(0, 4))
+
+        self.platform_vars = platform_vars or {}
+        for key, name, color in PLATFORM_DEFS:
+            row = ctk.CTkFrame(plat_card, fg_color="transparent")
+            row.pack(fill="x", padx=6, pady=1)
+
+            # Checkbox para activar/desactivar
+            chk_var = self.platform_vars.get(f"{key}_enabled")
+            if chk_var:
+                cb = ctk.CTkCheckBox(row, text="", variable=chk_var,
+                                     fg_color=color, hover_color=ACCENT_H,
+                                     corner_radius=4, checkbox_width=16,
+                                     checkbox_height=16, width=20)
+                cb.pack(side="left")
+                all_inputs.append(cb)
+
+            # Bolita de color + nombre
+            ctk.CTkLabel(row, text=f"● {name}", font=("Segoe UI", 10),
+                         text_color=color, width=100, anchor="w").pack(side="left")
+
+            # Entry para URL
+            url_var = self.platform_vars.get(f"{key}_url")
+            if url_var:
+                placeholder = "https://..." if key != "custom" else "Texto personalizado"
+                entry = ctk.CTkEntry(row, textvariable=url_var,
+                                     font=("Segoe UI", 9), fg_color=CARD,
+                                     corner_radius=4, height=24,
+                                     placeholder_text=placeholder)
+                entry.pack(side="left", fill="x", expand=True, padx=4)
+                all_inputs.append(entry)
 
         # Duracion spot
         sf_dur = ctk.CTkFrame(self.spot_frame, fg_color="transparent")
@@ -92,9 +137,18 @@ class SpotPanel(ctk.CTkFrame):
         # Initially hidden
         self.spot_frame.pack_forget()
 
+        # Sync visibility when variable changes programmatically (e.g. loading .dudi)
+        self._spot_enabled.trace_add("write", lambda *_: self._toggle_spot())
+        spot_type.trace_add("write", lambda *_: self._on_spot_type_change(self._spot_type.get()))
+        # Actualizar label cuando spot_file cambia (al cargar proyecto)
+        spot_file.trace_add("write", lambda *_: self._update_spot_file_label())
+
     def _toggle_spot(self):
         if self._spot_enabled.get():
             self.spot_frame.pack(fill="x", padx=12, pady=(0, 8))
+            # Forzar que se muestre el sub-frame correcto según el tipo
+            self.after(50, lambda: self._on_spot_type_change(
+                self._spot_type.get()))
         else:
             self.spot_frame.pack_forget()
 
@@ -106,9 +160,19 @@ class SpotPanel(ctk.CTkFrame):
             self.spot_text_frame.pack_forget()
             self.spot_file_frame.pack(fill="x", pady=2)
 
+    def _update_spot_file_label(self):
+        """Actualiza el label del archivo cuando cambia (ej. al cargar .dudi)."""
+        p = self._spot_file.get()
+        if p and os.path.isfile(p):
+            self.spot_file_label.configure(text=short_path(p))
+        elif p:
+            self.spot_file_label.configure(text=os.path.basename(p))
+        else:
+            self.spot_file_label.configure(text=t("spot.none"))
+
     def _pick_spot_file(self):
         if self._spot_type.get() == "Imagen":
-            ft = [(t("spot.images"), "*.jpg *.png *.bmp"), (t("spot.all"), "*.*")]
+            ft = [(t("spot.images"), "*.jpg *.jpeg *.png *.bmp *.webp"), (t("spot.all"), "*.*")]
         else:
             ft = [("Video", "*.mp4 *.mov *.avi"), (t("spot.all"), "*.*")]
         p = filedialog.askopenfilename(title=t("spot.select_file"), filetypes=ft)
