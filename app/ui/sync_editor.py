@@ -15,6 +15,7 @@ from tkinter import messagebox, filedialog
 
 from app.config import ACCENT, ACCENT_H, DARK, CARD, DIM, INPUT_BG, GOLD, GREEN
 from app.i18n import t
+from app.ui.components import SpinnerLabel
 
 
 class SyncEditorWindow(ctk.CTkToplevel):
@@ -127,59 +128,124 @@ class SyncEditorWindow(ctk.CTkToplevel):
                       fg_color=CARD, hover_color="#2a2a4e",
                       command=self._autofix_gaps).pack(side="left", padx=2)
 
-        # Scrollable list
-        scroll = ctk.CTkScrollableFrame(parent, fg_color=INPUT_BG, corner_radius=8)
-        scroll.pack(fill="both", expand=True)
+        info_lbl = ctk.CTkLabel(tb, text=f"{len(self._palabras)} palabras",
+                                 font=("Segoe UI", 10), text_color=DIM)
+        info_lbl.pack(side="right", padx=8)
 
-        # Header row
-        hdr = ctk.CTkFrame(scroll, fg_color=CARD, height=28, corner_radius=4)
-        hdr.pack(fill="x", pady=(0, 4))
-        ctk.CTkLabel(hdr, text="#", width=35, font=("Consolas", 10),
-                     text_color=DIM).pack(side="left", padx=4)
-        ctk.CTkLabel(hdr, text="Palabra", width=180, font=("Consolas", 10, "bold"),
-                     text_color=ACCENT).pack(side="left", padx=4)
-        ctk.CTkLabel(hdr, text="Inicio (s)", width=100, font=("Consolas", 10),
-                     text_color=DIM).pack(side="left", padx=4)
-        ctk.CTkLabel(hdr, text="Fin (s)", width=100, font=("Consolas", 10),
-                     text_color=DIM).pack(side="left", padx=4)
-        ctk.CTkLabel(hdr, text="Duración", width=80, font=("Consolas", 10),
-                     text_color=DIM).pack(side="left", padx=4)
+        # Virtualizado: solo una Treeview nativa (ultraligera, sin CTk overhead)
+        import tkinter.ttk as ttk
 
-        self._rows = []
+        # Estilo oscuro para Treeview
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("Sync.Treeview",
+                         background="#0a0a14", foreground="#ffffff",
+                         fieldbackground="#0a0a14", rowheight=26,
+                         font=("Consolas", 10))
+        style.configure("Sync.Treeview.Heading",
+                         background=CARD, foreground=ACCENT,
+                         font=("Consolas", 10, "bold"))
+        style.map("Sync.Treeview",
+                   background=[("selected", ACCENT)],
+                   foreground=[("selected", "#000000")])
+
+        tree_frame = ctk.CTkFrame(parent, fg_color="#0a0a14", corner_radius=8)
+        tree_frame.pack(fill="both", expand=True)
+
+        cols = ("palabra", "inicio", "fin", "duracion")
+        self._tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
+                                   style="Sync.Treeview", selectmode="browse")
+        self._tree.heading("palabra", text="Palabra")
+        self._tree.heading("inicio", text="Inicio (s)")
+        self._tree.heading("fin", text="Fin (s)")
+        self._tree.heading("duracion", text="Duración")
+
+        self._tree.column("palabra", width=200, minwidth=120)
+        self._tree.column("inicio", width=100, minwidth=80)
+        self._tree.column("fin", width=100, minwidth=80)
+        self._tree.column("duracion", width=80, minwidth=60)
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self._tree.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # Insertar todas las palabras (Treeview maneja virtualización nativa)
         for i, w in enumerate(self._palabras):
-            row = ctk.CTkFrame(scroll, fg_color=DARK if i % 2 == 0 else CARD,
-                               height=28, corner_radius=4)
-            row.pack(fill="x", pady=1)
-
-            ctk.CTkLabel(row, text=f"{i+1}", width=35, font=("Consolas", 10),
-                         text_color=DIM).pack(side="left", padx=4)
-
-            word_lbl = ctk.CTkLabel(row, text=w.get("palabra", ""),
-                                     width=180, font=("Segoe UI", 11, "bold"),
-                                     text_color="#ffffff", anchor="w")
-            word_lbl.pack(side="left", padx=4)
-
-            start_var = ctk.StringVar(value=f"{w.get('inicio', 0):.3f}")
-            start_entry = ctk.CTkEntry(row, textvariable=start_var, width=100,
-                                        height=24, font=("Consolas", 10),
-                                        fg_color=INPUT_BG, border_width=1,
-                                        border_color="#2a2a4e")
-            start_entry.pack(side="left", padx=4)
-
-            end_var = ctk.StringVar(value=f"{w.get('fin', 0):.3f}")
-            end_entry = ctk.CTkEntry(row, textvariable=end_var, width=100,
-                                      height=24, font=("Consolas", 10),
-                                      fg_color=INPUT_BG, border_width=1,
-                                      border_color="#2a2a4e")
-            end_entry.pack(side="left", padx=4)
-
             dur = w.get("fin", 0) - w.get("inicio", 0)
-            dur_lbl = ctk.CTkLabel(row, text=f"{dur:.3f}s", width=80,
-                                    font=("Consolas", 10),
-                                    text_color=GREEN if dur > 0.1 else ACCENT)
-            dur_lbl.pack(side="left", padx=4)
+            self._tree.insert("", "end", iid=str(i), values=(
+                w.get("palabra", ""),
+                f"{w.get('inicio', 0):.3f}",
+                f"{w.get('fin', 0):.3f}",
+                f"{dur:.3f}s",
+            ))
 
-            self._rows.append((word_lbl, start_var, end_var, dur_lbl))
+        # Alternar colores de filas
+        self._tree.tag_configure("even", background="#0a0a14")
+        self._tree.tag_configure("odd", background="#12121e")
+        for i, item in enumerate(self._tree.get_children()):
+            self._tree.item(item, tags=("even" if i % 2 == 0 else "odd",))
+
+        # Doble-click para editar
+        self._tree.bind("<Double-1>", self._on_tree_edit)
+        self._edit_entry = None
+
+    def _on_tree_edit(self, event):
+        """Edición in-line al hacer doble click en una celda."""
+        item = self._tree.identify_row(event.y)
+        col = self._tree.identify_column(event.x)
+        if not item or not col:
+            return
+
+        col_idx = int(col.replace("#", "")) - 1
+        col_name = ("palabra", "inicio", "fin", "duracion")[col_idx]
+
+        # Solo editar inicio y fin
+        if col_name not in ("inicio", "fin"):
+            return
+
+        # Posición de la celda
+        x, y, w, h = self._tree.bbox(item, col)
+        val = self._tree.set(item, col_name)
+
+        # Destruir editor previo
+        if self._edit_entry:
+            self._edit_entry.destroy()
+
+        entry = tk.Entry(self._tree, font=("Consolas", 10),
+                         bg="#1a1a2e", fg="#ffffff", insertbackground="#ffffff",
+                         relief="flat", borderwidth=1)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.insert(0, val)
+        entry.select_range(0, "end")
+        entry.focus_set()
+        self._edit_entry = entry
+
+        def _commit(ev=None):
+            new_val = entry.get().strip()
+            try:
+                float(new_val)  # Validar
+                self._tree.set(item, col_name, new_val)
+                # Actualizar duración
+                inicio = float(self._tree.set(item, "inicio"))
+                fin = float(self._tree.set(item, "fin"))
+                self._tree.set(item, "duracion", f"{fin - inicio:.3f}s")
+                # Actualizar datos internos
+                idx = int(item)
+                self._palabras[idx]["inicio"] = inicio
+                self._palabras[idx]["fin"] = fin
+            except ValueError:
+                pass
+            entry.destroy()
+            self._edit_entry = None
+
+        def _cancel(ev=None):
+            entry.destroy()
+            self._edit_entry = None
+
+        entry.bind("<Return>", _commit)
+        entry.bind("<Escape>", _cancel)
+        entry.bind("<FocusOut>", _commit)
 
     # ── Tab: Líneas ──
 
@@ -286,7 +352,19 @@ class SyncEditorWindow(ctk.CTkToplevel):
                                       fg_color=ACCENT, hover_color=ACCENT_H,
                                       font=("Segoe UI", 12, "bold"),
                                       command=self._run_ai_sync)
-        self._ai_btn.pack(pady=4)
+        self._ai_btn.pack(side="left", pady=4, padx=(0, 8))
+
+        self._ai_cancel_btn = ctk.CTkButton(btn_frame, text="Cancelar", width=80, height=40,
+                                             fg_color="#2a2a4a", hover_color=ACCENT,
+                                             font=("Segoe UI", 11),
+                                             command=self._cancel_ai, state="disabled")
+        self._ai_cancel_btn.pack(side="left", pady=4)
+
+        # Spinner
+        self._ai_spinner = SpinnerLabel(btn_frame, base_text="Procesando")
+        self._ai_spinner.pack(side="left", padx=12)
+
+        self._ai_process = None  # referencia al Popen activo
 
         # Log de IA
         self._ai_log = ctk.CTkTextbox(parent, height=150, font=("Consolas", 9),
@@ -310,30 +388,43 @@ class SyncEditorWindow(ctk.CTkToplevel):
 
     def _shift_all(self, delta):
         """Desplaza todos los timestamps por delta segundos."""
-        for i, (_, start_var, end_var, dur_lbl) in enumerate(self._rows):
-            try:
-                s = max(0, float(start_var.get()) + delta)
-                e = max(s + 0.01, float(end_var.get()) + delta)
-                start_var.set(f"{s:.3f}")
-                end_var.set(f"{e:.3f}")
-                dur_lbl.configure(text=f"{e - s:.3f}s")
-            except ValueError:
-                pass
+        if hasattr(self, '_tree'):
+            for item in self._tree.get_children():
+                try:
+                    s = max(0, float(self._tree.set(item, "inicio")) + delta)
+                    e = max(s + 0.01, float(self._tree.set(item, "fin")) + delta)
+                    self._tree.set(item, "inicio", f"{s:.3f}")
+                    self._tree.set(item, "fin", f"{e:.3f}")
+                    self._tree.set(item, "duracion", f"{e - s:.3f}s")
+                    idx = int(item)
+                    self._palabras[idx]["inicio"] = s
+                    self._palabras[idx]["fin"] = e
+                except (ValueError, IndexError):
+                    pass
 
     def _autofix_gaps(self):
         """Corrige gaps negativos o solapamientos entre palabras consecutivas."""
+        if not hasattr(self, '_tree'):
+            return
+        items = self._tree.get_children()
         fixed = 0
-        for i in range(1, len(self._rows)):
+        for i in range(1, len(items)):
             try:
-                prev_end = float(self._rows[i-1][2].get())
-                curr_start = float(self._rows[i][1].get())
+                prev_end = float(self._tree.set(items[i-1], "fin"))
+                curr_start = float(self._tree.set(items[i], "inicio"))
                 if curr_start < prev_end:
-                    # Solapamiento: mover inicio actual al fin del anterior
                     mid = (prev_end + curr_start) / 2
-                    self._rows[i-1][2].set(f"{mid:.3f}")
-                    self._rows[i][1].set(f"{mid:.3f}")
+                    self._tree.set(items[i-1], "fin", f"{mid:.3f}")
+                    self._tree.set(items[i], "inicio", f"{mid:.3f}")
+                    # Update durations
+                    prev_s = float(self._tree.set(items[i-1], "inicio"))
+                    curr_e = float(self._tree.set(items[i], "fin"))
+                    self._tree.set(items[i-1], "duracion", f"{mid - prev_s:.3f}s")
+                    self._tree.set(items[i], "duracion", f"{curr_e - mid:.3f}s")
+                    self._palabras[i-1]["fin"] = mid
+                    self._palabras[i]["inicio"] = mid
                     fixed += 1
-            except ValueError:
+            except (ValueError, IndexError):
                 pass
 
         self._ai_log_msg(f"Autofix: {fixed} solapamientos corregidos")
@@ -343,10 +434,21 @@ class SyncEditorWindow(ctk.CTkToplevel):
     def _run_ai_sync(self):
         provider = self._ai_provider.get()
         self._ai_btn.configure(state="disabled", text="Sincronizando...")
+        self._ai_cancel_btn.configure(state="normal")
+        self._ai_spinner.start(f"Ejecutando {provider}")
 
         thread = threading.Thread(target=self._ai_sync_thread,
                                   args=(provider,), daemon=True)
         thread.start()
+
+    def _cancel_ai(self):
+        """Cancela el proceso de IA en curso."""
+        if self._ai_process and self._ai_process.poll() is None:
+            self._ai_process.kill()
+            self._ai_log_msg("Proceso cancelado por el usuario.")
+        self._ai_spinner.stop("Cancelado")
+        self._ai_btn.configure(state="normal", text="Ejecutar Sincronización IA")
+        self._ai_cancel_btn.configure(state="disabled")
 
     def _ai_sync_thread(self, provider):
         try:
@@ -361,25 +463,15 @@ class SyncEditorWindow(ctk.CTkToplevel):
         except Exception as ex:
             self._ai_log_msg(f"ERROR: {ex}")
         finally:
-            self.after(0, lambda: self._ai_btn.configure(
-                state="normal", text="Ejecutar Sincronización IA"))
+            def _done():
+                self._ai_spinner.stop("")
+                self._ai_btn.configure(state="normal", text="Ejecutar Sincronización IA")
+                self._ai_cancel_btn.configure(state="disabled")
+            self.after(0, _done)
 
     def _sync_with_claude_code(self):
         """Ejecuta Claude Code en terminal para mejorar timestamps."""
         self._ai_log_msg("Ejecutando Claude Code...")
-
-        # Construir el prompt para Claude
-        ts_json = self._build_current_json()
-        prompt_extra = self._prompt_text.get("1.0", "end").strip()
-
-        prompt = (
-            f"Tengo un archivo de audio en: {self._audio_path}\n"
-            f"Y estos timestamps de sincronización:\n"
-            f"```json\n{json.dumps(ts_json, ensure_ascii=False, indent=2)[:3000]}\n```\n\n"
-            f"{prompt_extra}\n\n"
-            f"Responde SOLO con el JSON corregido de timestamps, "
-            f"manteniendo el mismo formato. Sin explicaciones."
-        )
 
         # Verificar que claude está disponible
         claude_cmd = self._find_claude_cmd()
@@ -389,26 +481,113 @@ class SyncEditorWindow(ctk.CTkToplevel):
             return
 
         self._ai_log_msg(f"Usando: {claude_cmd}")
-        self._ai_log_msg("Enviando prompt...")
+
+        # Guardar timestamps actuales a un archivo temporal para que Claude lo lea
+        ts_json = self._build_current_json()
+        ts_temp = os.path.join(os.path.dirname(self._audio_path), "_sync_temp.json")
+        with open(ts_temp, "w", encoding="utf-8") as f:
+            json.dump(ts_json, f, ensure_ascii=False, indent=2)
+
+        prompt_extra = self._prompt_text.get("1.0", "end").strip()
+
+        # Prompt detallado que le dice exactamente qué hacer
+        prompt = (
+            f"TAREA: Mejorar la sincronización de timestamps de una canción.\n\n"
+            f"ARCHIVOS:\n"
+            f"- Audio: {self._audio_path}\n"
+            f"- Timestamps actuales: {ts_temp}\n\n"
+            f"INSTRUCCIONES:\n"
+            f"1. Lee el archivo de timestamps con Read tool\n"
+            f"2. Usa Whisper para re-analizar el audio y obtener timestamps precisos "
+            f"palabra por palabra. Ejecuta este código Python:\n"
+            f"   import whisper; model = whisper.load_model('base'); "
+            f"result = model.transcribe(r'{self._audio_path}', language='es', "
+            f"word_timestamps=True)\n"
+            f"3. Compara los timestamps de Whisper con los existentes\n"
+            f"4. Genera un JSON corregido con el formato exacto:\n"
+            f'   {{"palabras": [{{"palabra": "texto", "inicio": 0.0, "fin": 0.5}}, ...], '
+            f'"segmentos": [...]}}\n'
+            f"5. Escribe el resultado en: {ts_temp}\n\n"
+            f"CONTEXTO ADICIONAL DEL USUARIO:\n{prompt_extra}\n\n"
+            f"IMPORTANTE: Escribe el JSON corregido directamente en {ts_temp}. "
+            f"No pidas confirmación, solo hazlo."
+        )
+
+        self._ai_log_msg("Enviando prompt con instrucciones completas...")
+        self._ai_log_msg(f"Timestamps temp: {ts_temp}")
 
         try:
-            result = subprocess.run(
-                [claude_cmd, "-p", prompt],
-                capture_output=True, text=True, timeout=120,
+            # Usar --allowedTools para dar permisos y evitar que pregunte
+            cmd = [
+                claude_cmd, "-p", prompt,
+                "--allowedTools", "Read,Write,Bash",
+                "--output-format", "text",
+            ]
+
+            # Ejecutar con Popen para leer output en tiempo real
+            self._ai_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=os.path.dirname(self._audio_path) or ".",
             )
 
-            output = result.stdout.strip()
-            self._ai_log_msg(f"Respuesta recibida ({len(output)} chars)")
+            process = self._ai_process
+            output_lines = []
+            for line in iter(process.stdout.readline, ""):
+                line = line.rstrip()
+                if line:
+                    output_lines.append(line)
+                    self._ai_log_msg(line[:200])
 
-            if result.returncode != 0 and result.stderr:
-                self._ai_log_msg(f"stderr: {result.stderr[:500]}")
+            process.wait(timeout=300)
+            output = "\n".join(output_lines)
 
-            # Intentar parsear JSON de la respuesta
-            self._parse_ai_response(output)
+            self._ai_log_msg(f"Proceso terminado (código: {process.returncode})")
+            self._ai_log_msg(f"Respuesta: {len(output)} chars")
+
+            # Claude debería haber escrito el resultado en ts_temp
+            # Intentar leer el archivo actualizado
+            if os.path.isfile(ts_temp):
+                try:
+                    with open(ts_temp, "r", encoding="utf-8") as f:
+                        updated = json.load(f)
+                    if isinstance(updated, dict) and "palabras" in updated:
+                        new_words = updated["palabras"]
+                        if new_words and len(new_words) > 0:
+                            self._ai_log_msg(f"Timestamps actualizados: {len(new_words)} palabras")
+                            self._palabras = new_words
+                            self._segmentos = updated.get("segmentos", self._segmentos)
+                            self.after(0, self._rebuild_words_tab)
+
+                            # Limpiar temp
+                            try:
+                                os.remove(ts_temp)
+                            except OSError:
+                                pass
+                            return
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # Fallback: intentar parsear del output directo
+            self._ai_log_msg("Intentando parsear respuesta directa...")
+            if output.strip():
+                self._parse_ai_response(output)
+            else:
+                self._ai_log_msg("No se recibió respuesta útil.")
+
+            # Limpiar temp
+            try:
+                os.remove(ts_temp)
+            except OSError:
+                pass
 
         except subprocess.TimeoutExpired:
-            self._ai_log_msg("ERROR: Timeout (2 min). Intenta con un prompt más corto.")
+            self._ai_log_msg("ERROR: Timeout (5 min).")
+            process.kill()
         except FileNotFoundError:
             self._ai_log_msg("ERROR: No se pudo ejecutar Claude Code.")
 
@@ -529,9 +708,13 @@ class SyncEditorWindow(ctk.CTkToplevel):
             return cmd
         # Rutas comunes en Windows
         for p in [
-            os.path.expanduser("~/.claude/local/claude.exe"),
-            os.path.expanduser("~/AppData/Roaming/npm/claude.cmd"),
-            os.path.expanduser("~/AppData/Roaming/npm/claude"),
+            os.path.expanduser("~\\.claude\\local\\claude.EXE"),
+            os.path.expanduser("~\\.claude\\local\\claude.exe"),
+            os.path.expanduser("~\\AppData\\Local\\bin\\claude.EXE"),
+            os.path.expanduser("~\\AppData\\Local\\bin\\claude.exe"),
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\claude.cmd"),
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\claude"),
+            "C:\\Users\\rober\\.local\\bin\\claude.EXE",
         ]:
             if os.path.isfile(p):
                 return p
@@ -539,14 +722,14 @@ class SyncEditorWindow(ctk.CTkToplevel):
 
     def _build_current_json(self):
         """Construye JSON con los valores actuales de la UI."""
-        if self._rows:
+        if hasattr(self, '_tree') and self._tree.get_children():
             palabras = []
-            for i, (word_lbl, start_var, end_var, _) in enumerate(self._rows):
+            for item in self._tree.get_children():
                 try:
                     palabras.append({
-                        "palabra": word_lbl.cget("text"),
-                        "inicio": float(start_var.get()),
-                        "fin": float(end_var.get()),
+                        "palabra": self._tree.set(item, "palabra"),
+                        "inicio": float(self._tree.set(item, "inicio")),
+                        "fin": float(self._tree.set(item, "fin")),
                     })
                 except ValueError:
                     pass
@@ -596,17 +779,19 @@ class SyncEditorWindow(ctk.CTkToplevel):
         # Actualizar datos
         if isinstance(data, dict) and "palabras" in data:
             new_words = data["palabras"]
-            if len(new_words) == len(self._rows):
+            items = self._tree.get_children() if hasattr(self, '_tree') else []
+            if len(new_words) == len(items):
                 for i, w in enumerate(new_words):
-                    self._rows[i][1].set(f"{w.get('inicio', 0):.3f}")
-                    self._rows[i][2].set(f"{w.get('fin', 0):.3f}")
+                    item = items[i]
+                    self._tree.set(item, "inicio", f"{w.get('inicio', 0):.3f}")
+                    self._tree.set(item, "fin", f"{w.get('fin', 0):.3f}")
                     dur = w.get("fin", 0) - w.get("inicio", 0)
-                    self.after(0, lambda lbl=self._rows[i][3], d=dur:
-                               lbl.configure(text=f"{d:.3f}s"))
+                    self._tree.set(item, "duracion", f"{dur:.3f}s")
+                self._palabras = new_words
                 self._ai_log_msg(f"Actualizado: {len(new_words)} palabras")
             else:
                 self._ai_log_msg(f"WARN: IA retornó {len(new_words)} palabras, "
-                                 f"esperaba {len(self._rows)}")
+                                 f"esperaba {len(items)}")
                 self._palabras = new_words
                 self.after(0, self._rebuild_words_tab)
         elif isinstance(data, list):

@@ -16,6 +16,7 @@ class Toolbar(ctk.CTkFrame):
                  all_inputs):
         super().__init__(parent, fg_color=DARK, height=56, corner_radius=0)
         self.pack_propagate(False)
+        self._anim_active = False
 
         # Logo icon al lado del nombre
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -77,7 +78,38 @@ class Toolbar(ctk.CTkFrame):
         ctk.CTkFrame(self, fg_color="#2a2a4a", width=2, height=30,
                      corner_radius=0).pack(side="left", padx=8)
 
-        # Progress in toolbar
+        # Right side buttons — pack BEFORE progress so expand doesn't steal space
+        # Orden visual (izq→der): 📂 📾 ⚙ About ?
+        if on_help:
+            ctk.CTkButton(self, text="?", height=34, width=34,
+                          font=("Segoe UI Bold", 13), fg_color="#2a2a4a",
+                          hover_color="#3a3a5a", text_color=GOLD, corner_radius=8,
+                          command=on_help).pack(side="right", padx=(3, 12))
+
+        ctk.CTkButton(self, text="About", height=34, width=56,
+                      font=("Segoe UI", 10), fg_color="#2a2a4a",
+                      hover_color="#3a3a5a", text_color=DIM, corner_radius=8,
+                      command=on_about).pack(side="right", padx=3)
+
+        ctk.CTkButton(self, text="\u2699", height=34, width=34,
+                      font=("Segoe UI", 16), fg_color="#2a2a4a",
+                      hover_color="#3a3a5a", text_color=DIM, corner_radius=8,
+                      command=on_settings).pack(side="right", padx=3)
+
+        if on_save_project:
+            ctk.CTkButton(self, text="\U0001f4be", height=34, width=34,
+                          font=("Segoe UI Emoji", 16), fg_color="#2a2a4a",
+                          hover_color="#3a3a5a",
+                          corner_radius=8, command=on_save_project
+                          ).pack(side="right", padx=3)
+        if on_open_project:
+            ctk.CTkButton(self, text="\U0001f4c2", height=34, width=34,
+                          font=("Segoe UI Emoji", 16), fg_color="#2a2a4a",
+                          hover_color="#3a3a5a",
+                          corner_radius=8, command=on_open_project
+                          ).pack(side="right", padx=3)
+
+        # Progress in toolbar — packed last so it fills remaining space
         prog_frame = ctk.CTkFrame(self, fg_color="transparent")
         prog_frame.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
@@ -99,39 +131,17 @@ class Toolbar(ctk.CTkFrame):
                                          anchor="w", height=14)
         self.status_label.pack(fill="x")
 
-        # Right side buttons
-        if on_help:
-            ctk.CTkButton(self, text="?", height=34, width=34,
-                          font=("Segoe UI Bold", 13), fg_color="#2a2a4a",
-                          hover_color="#3a3a5a", text_color=GOLD, corner_radius=8,
-                          command=on_help).pack(side="right", padx=(3, 12))
-        ctk.CTkButton(self, text="i", height=34, width=34,
-                      font=("Segoe UI Bold", 13), fg_color="#2a2a4a",
-                      hover_color="#3a3a5a", text_color=DIM, corner_radius=8,
-                      command=on_about).pack(side="right", padx=3)
-        ctk.CTkButton(self, text="\u2699", height=34, width=34,
-                      font=("Segoe UI", 16), fg_color="#2a2a4a",
-                      hover_color="#3a3a5a", text_color=DIM, corner_radius=8,
-                      command=on_settings).pack(side="right", padx=3)
-        ctk.CTkButton(self, text="\U0001f4c2", height=34, width=40,
-                      font=("Segoe UI", 14), fg_color="#2a2a4a",
-                      hover_color="#3a3a5a", corner_radius=8,
-                      command=on_open_folder).pack(side="right", padx=3)
-        if on_save_project:
-            ctk.CTkButton(self, text="\U0001f4be", height=34, width=40,
-                          font=("Segoe UI", 14), fg_color="#2a2a4a",
-                          hover_color="#3a3a5a", corner_radius=8,
-                          command=on_save_project).pack(side="right", padx=3)
-        if on_open_project:
-            ctk.CTkButton(self, text="\U0001f4c1", height=34, width=40,
-                          font=("Segoe UI", 14), fg_color="#2a2a4a",
-                          hover_color="#3a3a5a", corner_radius=8,
-                          command=on_open_project).pack(side="right", padx=3)
-
     def set_status(self, msg, pct=None):
         """Actualiza barra de progreso y status label."""
         self.status_label.configure(text=msg)
         if pct is not None:
+            # Detener animación cíclica si hay progreso real
+            self._anim_active = False
+            try:
+                self.progress_bar.stop()
+                self.progress_bar.configure(mode="determinate")
+            except Exception:
+                pass
             self.progress_bar.set(pct / 100.0)
             self.pct_label.configure(text=f"{int(pct)}%")
             if pct >= 100:
@@ -144,13 +154,40 @@ class Toolbar(ctk.CTkFrame):
                 self.status_label.configure(text_color=DIM)
 
     def set_generating(self):
-        """Desactiva el boton generar, activa cancel."""
+        """Desactiva el boton generar, activa cancel, inicia animación."""
         self.cancel_btn.configure(state="normal", text_color=ACCENT)
         self.gen_btn.configure(text=t("toolbar.generating"), fg_color="#3a3a5a",
                               state="disabled")
+        # Animación manual: barra que va y viene
+        self._anim_active = True
+        self._anim_pos = 0.0
+        self._anim_dir = 1  # 1=forward, -1=backward
+        self.progress_bar.configure(mode="determinate")
+        self._animate_progress()
+
+    def _animate_progress(self):
+        """Ciclo de animación: barra que se mueve de 0→1→0 continuamente."""
+        if not self._anim_active:
+            return
+        self._anim_pos += 0.03 * self._anim_dir
+        if self._anim_pos >= 1.0:
+            self._anim_pos = 1.0
+            self._anim_dir = -1
+        elif self._anim_pos <= 0.0:
+            self._anim_pos = 0.0
+            self._anim_dir = 1
+        self.progress_bar.set(self._anim_pos)
+        self.after(30, self._animate_progress)
 
     def set_idle(self):
-        """Restaura boton generar, desactiva cancel."""
+        """Restaura boton generar, desactiva cancel, para animación."""
+        self._anim_active = False
         self.cancel_btn.configure(state="disabled", text_color=DIM)
         self.gen_btn.configure(text=t("toolbar.generate"), fg_color=ACCENT,
                               state="normal")
+        try:
+            self.progress_bar.stop()
+        except Exception:
+            pass
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(0)

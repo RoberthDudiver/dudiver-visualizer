@@ -18,6 +18,24 @@ from app.core.audio import analyze_beats
 from app.core.spot import create_spot_frame
 
 
+def _kinetic_subprocess(config_dict):
+    """Top-level function para multiprocessing: renderiza kinetic en subprocess.
+
+    Debe ser top-level (no método) para que Windows pueda pickle-arlo.
+    """
+    import sys
+    from types import SimpleNamespace
+
+    skills_dir = os.path.normpath("C:/Users/rober/.claude/skills/music/scripts")
+    if skills_dir not in sys.path:
+        sys.path.insert(0, skills_dir)
+
+    from lyric_video_manim import render_kinetic
+
+    args = SimpleNamespace(**config_dict)
+    render_kinetic(args)
+
+
 class VideoGenerator:
     """
     Genera un video de lyrics. Recibe un dict de config + callbacks.
@@ -130,9 +148,34 @@ class VideoGenerator:
 
         except Exception as ex:
             import traceback
+            tb = traceback.format_exc()
             self.on_log(f"\u2715 ERROR: {ex}")
-            self.on_log(traceback.format_exc())
-            self.on_progress(f"\u2715 Error: {ex}", 0)
+            self.on_log(tb)
+
+            # Guardar log de error a archivo
+            try:
+                _out = self.cfg.get("output_path", "")
+                _aud = self.cfg.get("audio_path", "")
+                log_dir = os.path.dirname(_out) or os.path.dirname(_aud) or "."
+                log_path = os.path.join(log_dir, "dudiver_error.log")
+                with open(log_path, "w", encoding="utf-8") as _f:
+                    _f.write("Dudiver Visualizer Studio — Error Log\n")
+                    _f.write("=" * 50 + "\n")
+                    _f.write(f"Modo: {self.cfg.get('modo', '?')}\n")
+                    _f.write(f"Audio: {_aud}\n")
+                    _f.write(f"Output: {_out}\n")
+                    _f.write(f"Resolucion: {self.cfg.get('ancho', '?')}x"
+                             f"{self.cfg.get('alto', '?')}\n")
+                    _f.write(f"Fuente: {self.cfg.get('fuente_nombre', '?')}\n")
+                    _f.write(f"Estilo kinetic: {self.cfg.get('estilo_kinetic', 'N/A')}\n\n")
+                    _f.write(f"ERROR:\n{ex}\n\n")
+                    _f.write(f"TRACEBACK:\n{tb}\n")
+                self.on_log(f"Log guardado en: {log_path}")
+            except Exception:
+                pass
+
+            short_err = str(ex)[:80]
+            self.on_progress(f"\u2715 Error (ver dudiver_error.log): {short_err}", 0)
             try:
                 audio_clip.close()
             except Exception:
@@ -227,7 +270,8 @@ class VideoGenerator:
             img = crear_frame_normal(ancho, alto, timing, t, duracion,
                                      beat_times, (rms, rms_times), esquema,
                                      fuente, fuente_titulo, fuente_peq,
-                                     parts, titulo, cur_bg)
+                                     parts, titulo, cur_bg,
+                                     effects=self.cfg.get("effects"))
 
             left = duracion - t
             if spot_on and left < 2.0:
@@ -250,9 +294,22 @@ class VideoGenerator:
             video = VideoClip(make_frame, duration=total_dur)
             video = video.with_audio(audio_clip)
             self.on_log(f"Escribiendo: {os.path.basename(output)}")
-            video.write_videofile(output, fps=fps, codec="libx264",
-                                  audio_codec="aac", bitrate="8000k",
-                                  preset="medium", logger=None)
+            # Codec según formato de salida
+            ext = os.path.splitext(output)[1].lower()
+            if ext == ".webm":
+                codec, audio_codec = "libvpx-vp9", "libvorbis"
+            elif ext == ".avi":
+                codec, audio_codec = "mpeg4", "mp3"
+            elif ext == ".mov":
+                codec, audio_codec = "prores_ks", "aac"
+            else:
+                codec, audio_codec = "libx264", "aac"
+            write_kwargs = dict(fps=fps, codec=codec,
+                                audio_codec=audio_codec, bitrate="8000k",
+                                logger=None)
+            if codec == "libx264":
+                write_kwargs["preset"] = "medium"
+            video.write_videofile(output, **write_kwargs)
             video.close()
             self.on_log(f"\u2713 {os.path.basename(output)}")
             self.on_progress("\u2713 Completado!", 100)
@@ -260,76 +317,121 @@ class VideoGenerator:
             self.on_progress("\u2715 Cancelado", 0)
 
     def _render_kinetic(self):
-        """Render usando Manim kinetic typography."""
+        """Render usando Manim kinetic typography en subprocess cancelable."""
+        import json
+        import time
+        import multiprocessing
+
         cfg = self.cfg
         audio_path = cfg["audio_path"]
         output = cfg["output_path"]
 
         try:
-            self.on_progress("Preparando Manim...", 5)
+            self.on_progress("Preparando Manim...", None)
             self.on_log("Modo: Kinetic Typography")
             self.on_log(f"Estilo: {cfg['estilo_kinetic']}")
-
-            import json
 
             # Buscar timestamps Whisper con palabras individuales
             whisper_ts = os.path.splitext(audio_path)[0] + "_timestamps.json"
             ts_temp = None
 
             if os.path.isfile(whisper_ts):
-                # Verificar que tenga palabras individuales
                 with open(whisper_ts, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict) and "palabras" in data and data["palabras"]:
                     ts_temp = whisper_ts
                     self.on_log(f"  {len(data['palabras'])} palabras individuales")
 
-            # Fallback: guardar timing de líneas en temp
             if not ts_temp:
                 ts_temp = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
                 with open(ts_temp, "w", encoding="utf-8") as f:
                     json.dump(cfg["timing"], f, ensure_ascii=False)
                 self.on_log("  Usando timestamps de líneas (sin palabras individuales)")
 
-            # Importar render_kinetic
-            from lyric_video_manim import render_kinetic
+            # Config serializable para el subprocess
+            kinetic_config = {
+                "audio": audio_path,
+                "timestamps": ts_temp,
+                "output": output,
+                "estilo": cfg.get("estilo_kinetic", "wave"),
+                "resolucion": f"{cfg['ancho']}x{cfg['alto']}",
+                "fps": cfg["fps"],
+                "color": cfg.get("esquema_kinetic", "neon"),
+                "color_texto": None,
+                "color_glow": None,
+                "fuente": cfg.get("fuente_nombre", "Arial"),
+                "font_size": cfg.get("font_size", 72),
+                "alpha": cfg.get("alpha_mode", False),
+                "fondo": cfg.get("fondo_path", None),
+            }
 
-            # Construir args object
-            class Args:
-                pass
+            self.on_log(f"Fuente: {kinetic_config['fuente']}")
+            self.on_log(f"Resolución: {kinetic_config['resolucion']} @ {kinetic_config['fps']}fps")
 
-            args = Args()
-            args.audio = audio_path
-            args.timestamps = ts_temp
-            args.output = output.replace(".webm", ".mp4")  # Manim genera MP4
-            args.estilo = cfg.get("estilo_kinetic", "wave")
-            args.resolucion = f"{cfg['ancho']}x{cfg['alto']}"
-            args.fps = cfg["fps"]
-            args.color = cfg.get("esquema_kinetic", "neon")
-            args.color_texto = None
-            args.color_glow = None
-            args.fuente = cfg.get("fuente_nombre", "Arial")
-            args.font_size = cfg.get("font_size", 72)
-            args.alpha = cfg.get("alpha_mode", False)
+            # Ejecutar en subprocess cancelable
+            self.on_progress("Renderizando kinetic...", None)
+            proc = multiprocessing.Process(
+                target=_kinetic_subprocess, args=(kinetic_config,))
+            proc.start()
+            start_time = time.time()
 
-            self.on_progress("Renderizando kinetic...", 15)
-            self.on_log(f"Fuente: {args.fuente}")
-            self.on_log(f"Resolución: {args.resolucion} @ {args.fps}fps")
+            # Poll loop: check cancel cada 0.5s, actualizar status
+            while proc.is_alive():
+                if self.is_cancelled():
+                    self.on_log("Cancelando render...")
+                    proc.terminate()
+                    proc.join(timeout=5)
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join(timeout=3)
+                    self.on_log("\u2715 Renderizado cancelado")
+                    self.on_progress("\u2715 Cancelado", 0)
+                    # Limpiar temp
+                    if ts_temp != whisper_ts and os.path.exists(ts_temp):
+                        os.remove(ts_temp)
+                    return
+                elapsed = int(time.time() - start_time)
+                self.on_progress(f"Renderizando kinetic... ({elapsed}s)", None)
+                proc.join(timeout=0.5)
 
-            result = render_kinetic(args)
-
-            # Limpiar temp (no borrar el Whisper original)
+            # Limpiar temp
             if ts_temp != whisper_ts and os.path.exists(ts_temp):
                 os.remove(ts_temp)
 
-            if result:
-                self.on_log(f"\u2713 {os.path.basename(result)}")
+            if proc.exitcode == 0 and os.path.isfile(output):
+                self.on_log(f"\u2713 {os.path.basename(output)}")
                 self.on_progress("\u2713 Completado!", 100)
             else:
-                self.on_progress("\u2715 Error en render", 0)
+                self.on_log(f"\u2715 Proceso terminó con código {proc.exitcode}")
+                self.on_progress("\u2715 Error en render (ver log)", 0)
 
         except Exception as ex:
             import traceback
+            tb = traceback.format_exc()
             self.on_log(f"\u2715 ERROR: {ex}")
-            self.on_log(traceback.format_exc())
-            self.on_progress(f"\u2715 Error: {ex}", 0)
+            self.on_log(tb)
+
+            # Guardar log de error a archivo
+            try:
+                _out = self.cfg.get("output_path", "")
+                _aud = self.cfg.get("audio_path", "")
+                log_dir = os.path.dirname(_out) or os.path.dirname(_aud) or "."
+                log_path = os.path.join(log_dir, "dudiver_error.log")
+                with open(log_path, "w", encoding="utf-8") as _f:
+                    _f.write("Dudiver Visualizer Studio — Error Log\n")
+                    _f.write("=" * 50 + "\n")
+                    _f.write(f"Modo: {self.cfg.get('modo', '?')}\n")
+                    _f.write(f"Audio: {_aud}\n")
+                    _f.write(f"Output: {_out}\n")
+                    _f.write(f"Resolucion: {self.cfg.get('ancho', '?')}x"
+                             f"{self.cfg.get('alto', '?')}\n")
+                    _f.write(f"Fuente: {self.cfg.get('fuente_nombre', '?')}\n")
+                    _f.write(f"Estilo kinetic: {self.cfg.get('estilo_kinetic', 'N/A')}\n\n")
+                    _f.write(f"ERROR:\n{ex}\n\n")
+                    _f.write(f"TRACEBACK:\n{tb}\n")
+                self.on_log(f"Log guardado en: {log_path}")
+            except Exception:
+                pass
+
+            short_err = str(ex)[:80]
+            self.on_progress(f"\u2715 Error (ver dudiver_error.log): {short_err}", 0)

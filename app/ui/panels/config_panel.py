@@ -60,6 +60,7 @@ class ConfigPanel(ctk.CTkFrame):
     def __init__(self, parent, *, tamano_var, fps_var, esquema_var,
                  whisper_var, duracion_var, font_size_var,
                  modo_var, estilo_kinetic_var, fuente_var,
+                 formato_var=None,
                  chk_particulas, chk_onda, chk_vineta, chk_glow, chk_barra,
                  all_inputs):
         super().__init__(parent, fg_color=DARK, corner_radius=0)
@@ -101,6 +102,11 @@ class ConfigPanel(ctk.CTkFrame):
         _mini_dropdown(grid, "Whisper", whisper_var, ["tiny", "base", "small", "medium"], all_inputs, 1, 1)
         _mini_dropdown(grid, t("config.duration"), duracion_var, list(DURACIONES.keys()), all_inputs, 2, 0)
 
+        if formato_var:
+            _mini_dropdown(grid, "Formato", formato_var,
+                           ["MP4", "WebM", "MOV (ProRes)", "AVI"],
+                           all_inputs, 3, 0)
+
         # Font size slider en la celda derecha de row 2
         fs_cell = ctk.CTkFrame(grid, fg_color="transparent")
         fs_cell.grid(row=2, column=1, sticky="ew", padx=3, pady=2)
@@ -141,7 +147,7 @@ class ConfigPanel(ctk.CTkFrame):
     def _update_mode(self, modo):
         if modo == "Kinetic Typography":
             self.kinetic_frame.pack(fill="x", padx=8, pady=(0, 2))
-            self.karaoke_efx_frame.pack_forget()
         else:
             self.kinetic_frame.pack_forget()
-            self.karaoke_efx_frame.pack(fill="x")
+        # Efectos siempre visibles (aplican a Karaoke, informativo en Kinetic)
+        self.karaoke_efx_frame.pack(fill="x")

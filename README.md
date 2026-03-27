@@ -24,12 +24,28 @@
 
 ---
 
-<!-- TODO: Replace with actual screenshots/GIFs -->
-<!--
 <p align="center">
-  <img src="docs/demo.gif" width="720" alt="Demo — Song to lyric video in 3 clicks">
+  <img src="docs/Captura%20de%20pantalla%202026-03-26%20182016.png" width="720" alt="Main window — Karaoke mode with effects panel">
 </p>
--->
+
+<p align="center">
+  <img src="docs/Captura%20de%20pantalla%202026-03-26%20182228.png" width="720" alt="Kinetic Typography mode with live preview">
+</p>
+
+<table>
+<tr>
+<td><img src="docs/Captura%20de%20pantalla%202026-03-26%20182257.png" width="420" alt="Sync Editor — Words tab with per-word timestamps"></td>
+<td><img src="docs/Captura%20de%20pantalla%202026-03-26%20182341.png" width="420" alt="Sync Editor — Lines tab with full-line view"></td>
+</tr>
+<tr>
+<td align="center"><em>Sync Editor — Words</em></td>
+<td align="center"><em>Sync Editor — Lines</em></td>
+</tr>
+</table>
+
+<p align="center">
+  <a href="docs/Como%20t%C3%BA%20me%20miras_visualizer.mp4">Watch a 30-second demo video</a>
+</p>
 
 ## The Problem
 
@@ -41,7 +57,7 @@ Dudiver Visualizer Studio uses **Whisper AI** to detect exactly when each word i
 
 | Input | Output |
 |-------|--------|
-| Audio file (MP3/WAV/FLAC) + lyrics | Synced lyric video (MP4/WebM) |
+| Audio file (MP3/WAV/FLAC) + lyrics | Synced lyric video (MP4/WebM/MOV/AVI) |
 | 1 song | YouTube + TikTok + Instagram + Stories in one session |
 
 ---
@@ -230,7 +246,7 @@ app/
 
 - [x] Karaoke mode with effects (particles, glow, vignette)
 - [x] Whisper AI word-level sync
-- [x] Multiple export formats (YouTube, TikTok, Instagram, Stories)
+- [x] Multiple export formats (MP4, WebM, MOV ProRes, AVI) + social presets
 - [x] Transparent background export (WebM/MOV)
 - [x] Kinetic Typography with 8 animation styles (Manim)
 - [x] Advanced Sync Editor with AI re-sync
