@@ -11,11 +11,13 @@ from app.ui.components import create_section
 
 
 class PreviewPanel(ctk.CTkFrame):
-    def __init__(self, parent, *, preview_time, on_time_change):
+    def __init__(self, parent, *, preview_time, on_time_change, on_lyrics_drag=None):
         super().__init__(parent, fg_color=DARK, corner_radius=0)
         self._audio_path = None
         self._audio_playing = False
         self._preview_time = preview_time
+        self._on_lyrics_drag = on_lyrics_drag
+        self._drag_start_y = None  # canvas Y al inicio del drag
 
         create_section(self, t("preview.title"))
 
@@ -34,8 +36,14 @@ class PreviewPanel(ctk.CTkFrame):
                                 border_width=1, border_color="#2a2a4a")
         pv_outer.pack(fill="both", expand=True)
 
-        self.preview_canvas = tk.Canvas(pv_outer, bg="#080810", highlightthickness=0)
+        self.preview_canvas = tk.Canvas(pv_outer, bg="#080810", highlightthickness=0,
+                                        cursor="fleur")
         self.preview_canvas.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Drag-and-drop para mover letras
+        self.preview_canvas.bind("<ButtonPress-1>", self._lyrics_drag_start)
+        self.preview_canvas.bind("<B1-Motion>", self._lyrics_drag_move)
+        self.preview_canvas.bind("<ButtonRelease-1>", self._lyrics_drag_end)
 
         # ── Tab Video ──
         self._video_path = None
@@ -388,6 +396,17 @@ class PreviewPanel(ctk.CTkFrame):
     def _range_release(self, event):
         self._dragging = None
 
+    def clear_preview(self):
+        """Borra el canvas de preview y detiene cualquier reproducción."""
+        self._stop_audio_playback()
+        self._stop_video()
+        self.preview_canvas.delete("all")
+        self.video_canvas.delete("all")
+        self._video_path = None
+        self._audio_path = None
+        self.timeline.set(0)
+        self.time_label.configure(text="0:00")
+
     def show_range(self, dur_secs, audio_dur):
         """Muestra el range slider y oculta el timeline normal."""
         audio_dur = max(audio_dur, 10)
@@ -544,6 +563,24 @@ class PreviewPanel(ctk.CTkFrame):
         except Exception:
             pass
         self._audio_playing = False
+
+    # ── Drag letras en preview ──
+
+    def _lyrics_drag_start(self, event):
+        """Guarda posición Y inicial del drag."""
+        self._drag_start_y = event.y
+
+    def _lyrics_drag_move(self, event):
+        """Mientras se arrastra, notifica el delta acumulado."""
+        if self._drag_start_y is None or self._on_lyrics_drag is None:
+            return
+        dy = event.y - self._drag_start_y
+        self._drag_start_y = event.y  # delta incremental (no total)
+        self._on_lyrics_drag(dy)
+
+    def _lyrics_drag_end(self, event):
+        """Fin del drag."""
+        self._drag_start_y = None
 
     def switch_to_preview(self):
         """Cambia al tab Preview y pausa video si está reproduciéndose."""

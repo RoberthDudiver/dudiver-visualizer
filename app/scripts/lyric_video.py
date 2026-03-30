@@ -199,6 +199,49 @@ def dibujar_onda(draw, ancho, alto, tiempo, color, beat_intensity=0):
         draw.polygon(points, fill=color)
 
 
+# ============ RECUADRO DE TEXTO ============
+
+def _get_box_color(esquema):
+    """Retorna un color oscuro derivado del esquema para el recuadro de texto."""
+    # Usar el color de gradiente superior (el más oscuro del fondo)
+    if "grad_top" in esquema:
+        r, g, b = esquema["grad_top"]
+    else:
+        r, g, b = 0, 0, 0
+    # Asegurar que sea suficientemente oscuro (máx 60 de brillo por canal)
+    r = min(r, 60)
+    g = min(g, 60)
+    b = min(b, 60)
+    return (r, g, b)
+
+
+def _draw_text_box(img, x1, y1, x2, y2, color_rgb, alpha_val, radius):
+    """Dibuja un rectángulo redondeado semitransparente detrás del texto."""
+    # Clamp bounds
+    W, H = img.size
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(W, x2)
+    y2 = min(H, y2)
+    if x2 <= x1 or y2 <= y1:
+        return img
+
+    overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+    r, g, b = color_rgb
+    fill_color = (r, g, b, alpha_val)
+    radius = min(radius, (x2 - x1) // 2, (y2 - y1) // 2)
+    if radius > 0:
+        odraw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill_color)
+    else:
+        odraw.rectangle([x1, y1, x2, y2], fill=fill_color)
+
+    if img.mode == 'RGBA':
+        return Image.alpha_composite(img, overlay)
+    else:
+        return Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+
+
 # ============ RENDERIZADO ============
 
 def cargar_fuente(size, bold=True):
@@ -207,8 +250,25 @@ def cargar_fuente(size, bold=True):
     return font
 
 
+def _calc_base_y(alto, total_h, lyrics_pos="Centro", lyrics_margin=40, lyrics_extra_y=0):
+    """Calcula el Y de inicio del bloque de letras según posición y margen."""
+    pos = lyrics_pos
+    if pos == "Arriba":
+        base_y = lyrics_margin
+    elif pos == "Abajo":
+        base_y = alto - total_h - lyrics_margin
+    else:  # Centro (default)
+        base_y = (alto - total_h) // 2
+    base_y += lyrics_extra_y
+    # Clamp: las letras no salen del frame
+    base_y = max(0, min(alto - max(total_h, 1), base_y))
+    return base_y
+
+
 def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_total,
-                      beat_times, fuente, fuente_titulo, titulo=""):
+                      beat_times, fuente, fuente_titulo, titulo="",
+                      lyrics_pos="Centro", lyrics_margin=40, lyrics_extra_y=0,
+                      effects=None):
     """
     Crea un frame con fondo 100% TRANSPARENTE (RGBA).
     Solo renderiza texto con efectos de glow y karaoke.
@@ -249,7 +309,7 @@ def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_to
     _bbox = draw.textbbox((0, 0), "Ay", font=fuente)
     linea_alto = int((_bbox[3] - _bbox[1]) * 1.5)
     total_h = (fin_v - inicio_v) * linea_alto
-    base_y = (alto - total_h) // 2
+    base_y = _calc_base_y(alto, total_h, lyrics_pos, lyrics_margin, lyrics_extra_y)
 
     # Colores para alpha mode (blancos/dorados brillantes sobre transparente)
     color_activo = (255, 220, 60, 255)
@@ -259,6 +319,13 @@ def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_to
     color_futuro = (180, 180, 190, 100)
     color_sombra = (0, 0, 0, 180)
     color_glow = (255, 180, 0, 80)
+
+    # Recuadro de texto para alpha mode
+    use_text_box_a = effects is not None and effects.get("text_box", False)
+    box_opacity_a = int(effects.get("text_box_opacity", 70) * 2.55) if effects else 0
+    box_radius_a = int(effects.get("text_box_radius", 8)) if effects else 8
+    box_pad_x_a = 18
+    box_pad_y_a = 6
 
     for idx in range(inicio_v, fin_v):
         lt = lineas_con_tiempo[idx]
@@ -272,6 +339,14 @@ def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_to
         bbox = draw.textbbox((0, 0), texto, font=fuente)
         tw = bbox[2] - bbox[0]
         x = (ancho - tw) // 2
+
+        # Recuadro detrás del texto (alpha mode — fondo oscuro)
+        if use_text_box_a and texto.strip():
+            img = _draw_text_box(img,
+                                 x - box_pad_x_a, y - box_pad_y_a,
+                                 x + tw + box_pad_x_a, y + linea_alto + box_pad_y_a,
+                                 (0, 0, 0), box_opacity_a, box_radius_a)
+            draw = ImageDraw.Draw(img)
 
         if es_activa:
             line_progress = 0
@@ -338,7 +413,8 @@ def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_to
 
 def crear_frame_normal(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_total,
                        beat_times, rms_data, esquema, fuente, fuente_titulo, fuente_peq,
-                       particulas, titulo="", bg_image=None, solo_fondo=False, effects=None):
+                       particulas, titulo="", bg_image=None, solo_fondo=False, effects=None,
+                       lyrics_pos="Centro", lyrics_margin=40, lyrics_extra_y=0):
     """Crea un frame con efectos visuales completos (modo normal con fondo)"""
 
     # Calcular beat intensity
@@ -349,12 +425,16 @@ def crear_frame_normal(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_t
             beat_intensity = max(beat_intensity, 1.0 - diff / 0.12)
 
     # Fondo
+    dim_bg = (effects is None) or effects.get("dim_bg", True)
     if bg_image is not None:
         img = bg_image.copy()
-        darkness = max(140, 180 - int(beat_intensity * 40))
-        overlay = Image.new('RGBA', img.size, (0, 0, 0, darkness))
-        img = img.convert('RGBA')
-        img = Image.alpha_composite(img, overlay).convert('RGB')
+        if dim_bg:
+            darkness = max(140, 180 - int(beat_intensity * 40))
+            overlay = Image.new('RGBA', img.size, (0, 0, 0, darkness))
+            img = img.convert('RGBA')
+            img = Image.alpha_composite(img, overlay).convert('RGB')
+        else:
+            img = img.convert('RGB')
     else:
         img = crear_gradiente(ancho, alto, tiempo_actual, esquema)
 
@@ -428,7 +508,15 @@ def crear_frame_normal(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_t
     _bbox2 = draw.textbbox((0, 0), "Ay", font=fuente)
     linea_alto = int((_bbox2[3] - _bbox2[1]) * 1.5)
     total_h = (fin_v - inicio_v) * linea_alto
-    base_y = (alto - total_h) // 2
+    base_y = _calc_base_y(alto, total_h, lyrics_pos, lyrics_margin, lyrics_extra_y)
+
+    # Parámetros de recuadro de texto
+    use_text_box = effects is not None and effects.get("text_box", False)
+    box_opacity = int(effects.get("text_box_opacity", 70) * 2.55) if effects else 0
+    box_radius = int(effects.get("text_box_radius", 8)) if effects else 8
+    box_color = _get_box_color(esquema)
+    box_pad_x = 18
+    box_pad_y = 6
 
     for idx in range(inicio_v, fin_v):
         lt = lineas_con_tiempo[idx]
@@ -442,6 +530,14 @@ def crear_frame_normal(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_t
         bbox = draw.textbbox((0, 0), texto, font=fuente)
         tw = bbox[2] - bbox[0]
         x = (ancho - tw) // 2
+
+        # Recuadro detrás del texto
+        if use_text_box and texto.strip():
+            img = _draw_text_box(img,
+                                 x - box_pad_x, y - box_pad_y,
+                                 x + tw + box_pad_x, y + linea_alto + box_pad_y,
+                                 box_color, box_opacity, box_radius)
+            draw = ImageDraw.Draw(img)
 
         if es_activa:
             line_progress = 0

@@ -1,5 +1,6 @@
 """Plataformas de streaming — logos, QR codes, y configuración."""
 
+import os
 import math
 from PIL import Image, ImageDraw, ImageFont
 

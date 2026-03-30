@@ -124,6 +124,16 @@ class VisualizerApp(ctk.CTk):
 
         self.formato_var = ctk.StringVar(value="MP4")
         self.preview_time = ctk.DoubleVar(value=0.0)
+        # Posición de letras
+        self.lyrics_pos_var = ctk.StringVar(value="Centro")
+        self.lyrics_margin_var = ctk.IntVar(value=40)
+        self._lyrics_drag_offset = 0   # offset acumulado en píxeles de video
+        self._preview_scale = 1.0      # ratio canvas/video para convertir drag
+        # Recuadro de texto
+        self.chk_text_box = ctk.BooleanVar(value=False)
+        self.text_box_opacity_var = ctk.IntVar(value=70)
+        self.text_box_radius_var = ctk.IntVar(value=8)
+        self.chk_dim_bg = ctk.BooleanVar(value=True)
 
         self._cancel = False
         self._worker = None
@@ -155,6 +165,7 @@ class VisualizerApp(ctk.CTk):
                                on_help=self._open_help,
                                on_save_project=self._save_project,
                                on_open_project=self._open_project,
+                               on_new_project=self._new_project,
                                all_inputs=self._all_inputs)
         self.toolbar.pack(fill="x")
 
@@ -204,6 +215,12 @@ class VisualizerApp(ctk.CTk):
                                         chk_vineta=self.chk_vineta,
                                         chk_glow=self.chk_glow,
                                         chk_barra=self.chk_barra,
+                                        lyrics_pos_var=self.lyrics_pos_var,
+                                        lyrics_margin_var=self.lyrics_margin_var,
+                                        chk_text_box=self.chk_text_box,
+                                        text_box_opacity_var=self.text_box_opacity_var,
+                                        text_box_radius_var=self.text_box_radius_var,
+                                        chk_dim_bg=self.chk_dim_bg,
                                         all_inputs=self._all_inputs)
         self.config_panel.pack(fill="x")
 
@@ -232,7 +249,8 @@ class VisualizerApp(ctk.CTk):
         # COL 2: Preview
         self.preview_panel = PreviewPanel(body,
                                           preview_time=self.preview_time,
-                                          on_time_change=self._on_time_change)
+                                          on_time_change=self._on_time_change,
+                                          on_lyrics_drag=self._on_lyrics_drag)
         self.preview_panel.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
 
         # Watchers — auto-preview + auto-save al cambiar configuración
@@ -245,9 +263,14 @@ class VisualizerApp(ctk.CTk):
                     self.chk_glow, self.chk_barra,
                     self.spot_enabled, self.spot_type, self.spot_text,
                     self.spot_subtext, self.spot_duration, self.formato_var,
+                    self.lyrics_margin_var,
+                    self.chk_text_box, self.text_box_opacity_var,
+                    self.text_box_radius_var, self.chk_dim_bg,
                     *self.platform_vars.values()]:
             var.trace_add("write", self._auto_preview)
             var.trace_add("write", self._auto_save_project)
+        # Al cambiar preset de posición, resetear el offset de drag
+        self.lyrics_pos_var.trace_add("write", self._on_lyrics_pos_change)
         self.audio_path.trace_add("write", self._auto_save_project)
         self.fondo_path.trace_add("write", self._auto_save_project)
         self.spot_file.trace_add("write", self._auto_save_project)
@@ -379,6 +402,52 @@ class VisualizerApp(ctk.CTk):
         self.after(0, _e)
 
     # ── Events ──────────────────────────────────────────────────────────────
+
+    def _build_effects(self):
+        """Construye el dict de efectos unificado para render y preview."""
+        return {
+            "particulas": self.chk_particulas.get(),
+            "onda": self.chk_onda.get(),
+            "vineta": self.chk_vineta.get(),
+            "glow": self.chk_glow.get(),
+            "barra": self.chk_barra.get(),
+            "dim_bg": self.chk_dim_bg.get(),
+            "text_box": self.chk_text_box.get(),
+            "text_box_opacity": self.text_box_opacity_var.get(),
+            "text_box_radius": self.text_box_radius_var.get(),
+        }
+
+    def _kinetic_base_y(self, total_h, alto):
+        """Calcula el Y de inicio del bloque de texto kinetic según la posición configurada."""
+        pos = self.lyrics_pos_var.get()
+        margin = self.lyrics_margin_var.get()
+        offset = self._lyrics_drag_offset
+        if pos == "Arriba":
+            base_y = margin
+        elif pos == "Abajo":
+            base_y = alto - total_h - margin
+        else:
+            base_y = (alto - total_h) // 2
+        base_y += offset
+        return max(0, min(alto - max(total_h, 1), base_y))
+
+    def _on_lyrics_pos_change(self, *_):
+        """Al cambiar preset (Arriba/Centro/Abajo), resetea el offset de drag."""
+        self._lyrics_drag_offset = 0
+        self._auto_preview()
+
+    def _on_lyrics_drag(self, dy_canvas):
+        """Convierte delta de canvas a píxeles de video y acumula offset."""
+        scale = self._preview_scale
+        if scale > 0:
+            dy_video = int(dy_canvas / scale)
+            self._lyrics_drag_offset += dy_video
+            # Disparar preview inmediato (sin debounce para drag fluido)
+            if self._preview_pending:
+                self.after_cancel(self._preview_pending)
+            self._preview_pending = None
+            self.preview_panel.switch_to_preview()
+            self._preview_pool.submit(self._preview_thread)
 
     def _on_time_change(self, val):
         m, s = divmod(int(float(val)), 60)
@@ -591,7 +660,11 @@ class VisualizerApp(ctk.CTk):
                     fuente=fuente, fuente_titulo=fuente_titulo, fuente_peq=fuente_peq,
                     esquema_key=self.esquema_var.get(),
                     alpha_mode=self.alpha_var.get(),
-                    fondo_path=self.fondo_path.get())
+                    fondo_path=self.fondo_path.get(),
+                    lyrics_pos=self.lyrics_pos_var.get(),
+                    lyrics_margin=self.lyrics_margin_var.get(),
+                    lyrics_extra_y=self._lyrics_drag_offset,
+                    effects=self._build_effects())
 
             self.after(0, lambda: self._show_preview_image(img, ancho, alto))
         except Exception:
@@ -621,7 +694,11 @@ class VisualizerApp(ctk.CTk):
                 fuente=fuente, fuente_titulo=fuente_titulo, fuente_peq=fuente_peq,
                 esquema_key=self.esquema_var.get(),
                 alpha_mode=self.alpha_var.get(),
-                fondo_path=self.fondo_path.get())
+                fondo_path=self.fondo_path.get(),
+                lyrics_pos=self.lyrics_pos_var.get(),
+                lyrics_margin=self.lyrics_margin_var.get(),
+                lyrics_extra_y=self._lyrics_drag_offset,
+                effects=self._build_effects())
 
         self._show_preview_image(img, ancho, alto)
 
@@ -644,20 +721,29 @@ class VisualizerApp(ctk.CTk):
         return None
 
     def _preview_kinetic(self, ancho, alto, lines, t, titulo):
-        """Genera preview simulando kinetic typography palabra por palabra."""
+        """Genera preview de Kinetic Typography con estilo multi-línea."""
         from PIL import ImageDraw, ImageFont
         esquema_key = ESQUEMA_GUI_TO_KINETIC.get(self.esquema_var.get(), "neon")
-        from app.scripts.lyric_video_manim import ESQUEMAS_KINETIC
+        from app.core.kinetic_pil import ESQUEMAS as ESQUEMAS_KINETIC
         esquema = ESQUEMAS_KINETIC.get(esquema_key, ESQUEMAS_KINETIC["neon"])
 
-        # Fondo: imagen si hay, sino negro
+        _efx_prev = self._build_effects()
+        _dim = _efx_prev.get("dim_bg", True)
+        _bg_brightness = 0.2 if _dim else 1.0
         fondo = self.fondo_path.get()
         if fondo and os.path.isfile(fondo):
             ext = os.path.splitext(fondo)[1].lower()
+            from PIL import ImageEnhance
             if ext in (".jpg", ".jpeg", ".png", ".bmp"):
                 bg = Image.open(fondo).resize((ancho, alto), Image.LANCZOS).convert("RGB")
-                from PIL import ImageEnhance
-                img = ImageEnhance.Brightness(bg).enhance(0.2)
+                img = ImageEnhance.Brightness(bg).enhance(_bg_brightness)
+            elif ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+                from app.core.renderer import _extract_video_frame
+                bg = _extract_video_frame(fondo, t, ancho, alto)
+                if bg:
+                    img = ImageEnhance.Brightness(bg.convert("RGB")).enhance(_bg_brightness)
+                else:
+                    img = Image.new("RGB", (ancho, alto), (8, 8, 16))
             else:
                 img = Image.new("RGB", (ancho, alto), (8, 8, 16))
         else:
@@ -666,8 +752,6 @@ class VisualizerApp(ctk.CTk):
 
         font_name = self.fuente_var.get()
         font_size = self.font_size_var.get()
-
-        # Resolver path de fuente directamente para poder crear a cualquier tamaño
         font_path = resolve_font_path(font_name)
         if not font_path:
             font_path = "arial.ttf"
@@ -682,11 +766,7 @@ class VisualizerApp(ctk.CTk):
                     return ImageFont.load_default()
 
         fuente = _make_font(font_size)
-
-        try:
-            fuente_peq = _make_font(14)
-        except Exception:
-            fuente_peq = fuente
+        fuente_peq = _make_font(14)
 
         color_activo = esquema["activo"]
         color_pasado = esquema["pasado"]
@@ -696,50 +776,49 @@ class VisualizerApp(ctk.CTk):
         estilo = self.estilo_kinetic_var.get()
         draw.text((ancho // 2, 30), f"KINETIC  ·  {estilo.upper()}",
                   fill="#3a3a5a", font=fuente_peq, anchor="mt")
-
         if titulo:
-            tf = _make_font(18)
             draw.text((ancho // 2, alto - 40), titulo, fill="#4a4a6a",
-                      font=tf, anchor="mb")
+                      font=_make_font(18), anchor="mb")
 
-        # Intentar palabra por palabra
         palabras = self._load_palabras_whisper()
         estilo_val = ESTILOS_KINETIC.get(estilo, "wave")
 
-        if estilo_val == "oneword" and palabras:
-            # Agrupar palabras cortas inteligentemente
-            from app.core.kinetic_pil import group_smart_oneword
-            palabras = group_smart_oneword(palabras)
-            self._draw_kinetic_oneword(draw, palabras, t, ancho, alto,
-                                       font_path, font_size, color_activo,
-                                       glow_color)
+        if estilo_val == "oneword":
+            if palabras:
+                from app.core.kinetic_pil import group_smart_oneword
+                palabras = group_smart_oneword(palabras)
+                img = self._draw_kinetic_oneword(img, palabras, t, ancho, alto,
+                                                 font_path, font_size, color_activo,
+                                                 glow_color, effects=_efx_prev)
+            else:
+                timing_fb = self._ensure_timing(lines) or fallback_timing(lines, self._dur or 180)
+                pseudo = [{"inicio": ts.get("inicio", 0), "fin": ts.get("fin", 0),
+                           "palabra": ts.get("texto", ts.get("linea", ""))}
+                          for ts in timing_fb if ts.get("texto", ts.get("linea", "")).strip()]
+                img = self._draw_kinetic_oneword(img, pseudo, t, ancho, alto,
+                                                 font_path, font_size, color_activo,
+                                                 glow_color, effects=_efx_prev)
         elif palabras:
-            self._draw_kinetic_words(draw, palabras, t, ancho, alto,
-                                     fuente, font_path, font_size,
-                                     color_activo, color_pasado,
-                                     color_futuro, glow_color)
+            img = self._draw_kinetic_words(img, palabras, t, ancho, alto,
+                                           fuente, font_path, font_size,
+                                           color_activo, color_pasado,
+                                           color_futuro, glow_color, effects=_efx_prev)
         else:
-            self._draw_kinetic_lines(draw, lines, t, ancho, alto,
-                                     fuente, font_path, font_size,
-                                     color_activo, color_pasado,
-                                     color_futuro, glow_color)
+            img = self._draw_kinetic_lines(img, lines, t, ancho, alto,
+                                           fuente, font_path, font_size,
+                                           color_activo, color_pasado,
+                                           color_futuro, glow_color, effects=_efx_prev)
 
-        # Aplicar efectos visuales
-        effects = {
-            "particulas": self.chk_particulas.get(),
-            "onda": self.chk_onda.get(),
-            "vineta": self.chk_vineta.get(),
-            "glow": self.chk_glow.get(),
-            "barra": self.chk_barra.get(),
-        }
-        img = self._apply_kinetic_effects(img, ancho, alto, t, effects, esquema)
-
+        img = self._apply_kinetic_effects(img, ancho, alto, t, _efx_prev, esquema)
         return img
 
-    def _draw_kinetic_oneword(self, draw, palabras, t, ancho, alto,
-                              font_path, font_size, color_activo, glow_color):
+    def _draw_kinetic_oneword(self, img, palabras, t, ancho, alto,
+                              font_path, font_size, color_activo, glow_color,
+                              effects=None):
         """Una sola palabra grande centrada que cambia según el tiempo."""
-        from PIL import ImageFont
+        from PIL import ImageFont, ImageDraw
+
+        draw = ImageDraw.Draw(img)
 
         def _font(sz):
             try:
@@ -765,12 +844,16 @@ class VisualizerApp(ctk.CTk):
             if palabras and t > palabras[-1]["fin"]:
                 palabra_actual = palabras[-1]
 
+        # Si no hay activa (antes del inicio o entre palabras), mostrar la próxima
         if not palabra_actual:
-            return
+            if palabra_next:
+                palabra_actual = palabra_next
+            else:
+                return img
 
         texto = palabra_actual["palabra"].strip(" ,.:;!?")
         if not texto:
-            return
+            return img
 
         # Tamaño grande — slider × 2, proporcional al canvas
         big_size = max(font_size * 2, 60)
@@ -778,10 +861,29 @@ class VisualizerApp(ctk.CTk):
         f_big = _font(big_size)
         bbox = draw.textbbox((0, 0), texto, font=f_big)
         tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
         if tw > ancho * 0.85:
-            f_big = _font(int(big_size * (ancho * 0.85) / tw))
+            scale = (ancho * 0.85) / tw
+            f_big = _font(int(big_size * scale))
+            bbox = draw.textbbox((0, 0), texto, font=f_big)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
 
-        cx, cy = ancho // 2, alto // 2
+        cx = ancho // 2
+        cy = self._kinetic_base_y(big_size, alto) + big_size // 2
+
+        # Recuadro detrás del texto
+        if effects and effects.get("text_box", False):
+            from app.scripts.lyric_video import _draw_text_box
+            opacity = int(effects.get("text_box_opacity", 70) * 2.55)
+            radius = int(effects.get("text_box_radius", 8))
+            pad_x, pad_y = 20, 12
+            x1 = cx - tw // 2 - pad_x
+            y1 = cy - th // 2 - pad_y
+            x2 = cx + tw // 2 + pad_x
+            y2 = cy + th // 2 + pad_y
+            img = _draw_text_box(img, x1, y1, x2, y2, (0, 0, 0), opacity, radius)
+            draw = ImageDraw.Draw(img)
 
         # Glow
         for dx in [-3, -2, -1, 1, 2, 3]:
@@ -799,11 +901,15 @@ class VisualizerApp(ctk.CTk):
                 draw.text((cx, cy + big_size * 0.7), next_txt,
                           fill="#3a3a5a", font=f_sm, anchor="mm")
 
-    def _draw_kinetic_words(self, draw, palabras, t, ancho, alto,
+        return img
+
+    def _draw_kinetic_words(self, img, palabras, t, ancho, alto,
                             fuente, font_path, font_size, color_activo,
-                            color_pasado, color_futuro, glow_color):
+                            color_pasado, color_futuro, glow_color, effects=None):
         """Dibuja preview word-by-word con la palabra activa resaltada."""
-        from PIL import ImageFont
+        from PIL import ImageFont, ImageDraw
+
+        draw = ImageDraw.Draw(img)
 
         def _font(sz):
             try:
@@ -842,8 +948,15 @@ class VisualizerApp(ctk.CTk):
         visible = frases[start:end]
 
         line_h = int(font_size * 1.6)
-        y_center = alto // 2
-        y_start = y_center - (len(visible) * line_h) // 2
+        total_h = len(visible) * line_h
+        y_start = self._kinetic_base_y(total_h, alto)
+
+        # Recuadro detrás de cada frase
+        use_box = effects and effects.get("text_box", False)
+        if use_box:
+            from app.scripts.lyric_video import _draw_text_box
+            box_opacity = int(effects.get("text_box_opacity", 70) * 2.55)
+            box_radius = int(effects.get("text_box_radius", 8))
 
         for fi, frase in enumerate(visible):
             real_fi = start + fi
@@ -854,10 +967,20 @@ class VisualizerApp(ctk.CTk):
             # Escalar fuente si la frase es muy ancha
             bbox = draw.textbbox((0, 0), texto_frase, font=fuente)
             tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
             if tw > ancho * 0.85:
                 f_used = _font(int(font_size * (ancho * 0.85) / tw))
+                bbox = draw.textbbox((0, 0), texto_frase, font=f_used)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
             else:
                 f_used = fuente
+
+            if use_box and texto_frase.strip():
+                x1 = ancho // 2 - tw // 2 - 18
+                img = _draw_text_box(img, x1, y - 6, x1 + tw + 36, y + th + 6,
+                                     (0, 0, 0), box_opacity, box_radius)
+                draw = ImageDraw.Draw(img)
 
             if real_fi != active_frase:
                 color = color_pasado if real_fi < active_frase else color_futuro
@@ -892,11 +1015,15 @@ class VisualizerApp(ctk.CTk):
 
                     x += word_widths[wi] + space_w
 
-    def _draw_kinetic_lines(self, draw, lines, t, ancho, alto,
+        return img
+
+    def _draw_kinetic_lines(self, img, lines, t, ancho, alto,
                             fuente, font_path, font_size, color_activo,
-                            color_pasado, color_futuro, glow_color):
+                            color_pasado, color_futuro, glow_color, effects=None):
         """Fallback: dibuja preview por líneas cuando no hay datos de palabras."""
-        from PIL import ImageFont
+        from PIL import ImageFont, ImageDraw
+
+        draw = ImageDraw.Draw(img)
 
         def _font(sz):
             try:
@@ -921,8 +1048,14 @@ class VisualizerApp(ctk.CTk):
         visible = timing[start:end]
 
         line_h = int(font_size * 1.6)
-        y_center = alto // 2
-        y_start = y_center - (len(visible) * line_h) // 2
+        total_h = len(visible) * line_h
+        y_start = self._kinetic_base_y(total_h, alto)
+
+        use_box = effects and effects.get("text_box", False)
+        if use_box:
+            from app.scripts.lyric_video import _draw_text_box
+            box_opacity = int(effects.get("text_box_opacity", 70) * 2.55)
+            box_radius = int(effects.get("text_box_radius", 8))
 
         for i, ts in enumerate(visible):
             real_idx = start + i
@@ -938,10 +1071,20 @@ class VisualizerApp(ctk.CTk):
 
             bbox = draw.textbbox((0, 0), linea, font=fuente)
             tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
             if tw > ancho * 0.85:
                 f_scaled = _font(int(font_size * (ancho * 0.85) / tw))
+                bbox = draw.textbbox((0, 0), linea, font=f_scaled)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
             else:
                 f_scaled = fuente
+
+            if use_box and linea.strip():
+                x1 = ancho // 2 - tw // 2 - 18
+                img = _draw_text_box(img, x1, y - 6, x1 + tw + 36, y + th + 6,
+                                     (0, 0, 0), box_opacity, box_radius)
+                draw = ImageDraw.Draw(img)
 
             if real_idx == active_idx:
                 for dx in [-2, -1, 0, 1, 2]:
@@ -952,6 +1095,8 @@ class VisualizerApp(ctk.CTk):
                                   fill=glow_color + "30", font=f_scaled, anchor="mt")
 
             draw.text((ancho // 2, y), linea, fill=color, font=f_scaled, anchor="mt")
+
+        return img
 
     def _apply_kinetic_effects(self, img, ancho, alto, t, effects, esquema):
         """Aplica efectos visuales (viñeta, glow, partículas, barra) a la preview Kinetic."""
@@ -1020,6 +1165,7 @@ class VisualizerApp(ctk.CTk):
         cw = max(canvas.winfo_width(), 200)
         ch = max(canvas.winfo_height(), 200)
         ratio = min(cw / ancho, ch / alto)
+        self._preview_scale = ratio  # guardar para convertir drag canvas→video
         nw, nh = max(1, int(ancho * ratio)), max(1, int(alto * ratio))
         img_r = img.resize((nw, nh), Image.Resampling.LANCZOS)
 
@@ -1040,6 +1186,26 @@ class VisualizerApp(ctk.CTk):
         if not lines:
             messagebox.showwarning(t("app.warn"), t("app.add_lyrics"))
             return
+
+        # Advertir si no hay timestamps procesados
+        has_timing = False
+        with self._data_lock:
+            has_timing = bool(self._lineas and len(self._lineas) > 0)
+        if not has_timing:
+            ts_path = get_ts_path(audio)
+            has_timing = bool(ts_path and os.path.isfile(ts_path))
+        if not has_timing:
+            resp = messagebox.askyesno(
+                "⚠️ Sin timestamps de letra",
+                "No se han procesado los timestamps con IA (botón Timestamps).\n\n"
+                "Si continúas, se generará el video con fondo musical e imagen/video,\n"
+                "pero SIN letra sincronizada.\n\n"
+                "¿Deseas continuar de todas formas?",
+                icon="warning"
+            )
+            if not resp:
+                return
+
         if self._worker and self._worker.is_alive():
             return
 
@@ -1110,13 +1276,11 @@ class VisualizerApp(ctk.CTk):
             "fuente_nombre": self.fuente_var.get(),
             "font_size": self.font_size_var.get(),
             # Efectos
-            "effects": {
-                "particulas": self.chk_particulas.get(),
-                "onda": self.chk_onda.get(),
-                "vineta": self.chk_vineta.get(),
-                "glow": self.chk_glow.get(),
-                "barra": self.chk_barra.get(),
-            },
+            "effects": self._build_effects(),
+            # Posición letra
+            "lyrics_pos": self.lyrics_pos_var.get(),
+            "lyrics_margin": self.lyrics_margin_var.get(),
+            "lyrics_extra_y": self._lyrics_drag_offset,
         }
 
         import multiprocessing
@@ -1136,6 +1300,7 @@ class VisualizerApp(ctk.CTk):
 
         # Monitorear progreso
         last_pct = 0
+        last_msg = ""
         while self._render_proc.is_alive():
             if self._cancel:
                 self._kill_process_tree(self._render_proc.pid)
@@ -1158,14 +1323,15 @@ class VisualizerApp(ctk.CTk):
                         line = f.read().strip()
                     if line:
                         parts = line.split("|", 1)
-                        pct = int(parts[0])
+                        pct = int(float(parts[0])) if parts[0] else last_pct
                         msg = parts[1] if len(parts) > 1 else "Renderizando..."
-                        if pct != last_pct:
+                        if pct != last_pct or msg != last_msg:
                             self._set_status(f"\u27f3 {msg}", pct)
                             last_pct = pct
+                            last_msg = msg
             except Exception:
                 pass
-            _time.sleep(0.3)
+            _time.sleep(0.15)
 
         # Proceso terminó — verificar éxito
         exit_code = self._render_proc.exitcode
@@ -1178,7 +1344,11 @@ class VisualizerApp(ctk.CTk):
         except Exception:
             pass
 
-        if exit_code == 0:
+        out_path = config.get("output_path", "")
+        # Verificar que el archivo realmente se generó (aunque exit_code == 0)
+        output_exists = bool(out_path and os.path.isfile(out_path))
+
+        if exit_code == 0 and output_exists:
             self._set_status("✓ Video generado", 100)
 
             # Update timeline
@@ -1190,10 +1360,19 @@ class VisualizerApp(ctk.CTk):
                     text=f"/ {m}:{s:02d}"))
 
             # Cargar video generado
-            out_path = config.get("output_path", "")
-            if out_path and os.path.isfile(out_path):
-                self.after(0, lambda: self.preview_panel.load_video(out_path))
-                self._log(f"✓ Video generado: {os.path.basename(out_path)}")
+            self.after(0, lambda: self.preview_panel.load_video(out_path))
+            self._log(f"✓ Video generado: {os.path.basename(out_path)}")
+        elif exit_code == 0 and not output_exists:
+            # Render reportó éxito pero el archivo no existe → error interno
+            self._set_status("✗ Error generando video (ver log)", 0)
+            self._log("✗ Error: el proceso terminó sin generar el video")
+            err_log = out_path + ".error.log" if out_path else "dudiver_error.log"
+            if os.path.isfile(err_log):
+                try:
+                    with open(err_log, "r") as f:
+                        self._log(f.read()[:500])
+                except Exception:
+                    pass
         else:
             self._log(f"✗ Error en render (código: {exit_code})")
             # Revisar si hay log de error
@@ -1258,6 +1437,29 @@ class VisualizerApp(ctk.CTk):
             messagebox.showwarning(t("app.warn"), t("app.select_audio"))
             return
         ts_path = get_ts_path(audio)
+
+        # Si el archivo no existe en disco pero hay datos en memoria
+        # (proyecto cargado desde .dudi), escribirlos al archivo
+        if not ts_path or not os.path.isfile(ts_path):
+            lineas_mem = None
+            with self._data_lock:
+                if self._lineas and len(self._lineas) > 0:
+                    lineas_mem = self._lineas
+
+            if lineas_mem and ts_path:
+                # Guardar en disco para que el SyncEditor pueda abrirlos
+                import json as _json
+                # Usar whisper_raw si existe (formato completo), sino formato simple
+                if self._whisper_raw:
+                    data_to_save = self._whisper_raw
+                else:
+                    data_to_save = lineas_mem
+                try:
+                    with open(ts_path, "w", encoding="utf-8") as f:
+                        _json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+
         if not ts_path or not os.path.isfile(ts_path):
             messagebox.showwarning(t("app.warn"), t("app.no_ts_run_whisper"))
             return
@@ -1272,6 +1474,106 @@ class VisualizerApp(ctk.CTk):
 
     def _open_help(self):
         HelpWindow(self)
+
+    def _new_project(self):
+        """Cierra el proyecto actual (guardando) y limpia todo para una canción nueva."""
+        # ── 1. Guardar proyecto actual silenciosamente ──────────────────────────
+        if self._save_pending:
+            self.after_cancel(self._save_pending)
+            self._save_pending = None
+        # Auto-guardar si hay un .dudi activo o hay audio cargado
+        audio_actual = self.audio_path.get()
+        if audio_actual and os.path.isfile(audio_actual):
+            try:
+                self._do_auto_save()
+            except Exception:
+                pass
+
+        # ── 2. Advertencia ─────────────────────────────────────────────────────
+        titulo_actual = self.titulo_var.get().strip() or "el proyecto actual"
+        respuesta = messagebox.askyesno(
+            "Nuevo proyecto",
+            f"Se cerrará «{titulo_actual}».\n\n"
+            "El proyecto se ha guardado automáticamente.\n\n"
+            "¿Deseas continuar y empezar una canción nueva?",
+            icon="warning",
+        )
+        if not respuesta:
+            return
+
+        # ── 3. Limpiar toda la memoria interna ─────────────────────────────────
+        self._loading_project = True
+        try:
+            with self._data_lock:
+                self._lineas = None
+                self._whisper_raw = None
+                self._dur = 0.0
+            self._dudi_path = None
+            self._lyrics_drag_offset = 0
+            self._preview_scale = 1.0
+            if self._preview_pending:
+                self.after_cancel(self._preview_pending)
+                self._preview_pending = None
+
+            # ── 4. Resetear todas las variables a valores por defecto ──────────
+            self.audio_path.set("")
+            self.letra_path.set("")
+            self.fondo_path.set("")
+            self.titulo_var.set("")
+            self.tamano_var.set("YouTube 1920×1080")
+            self.fps_var.set("30")
+            self.esquema_var.set("Noche")
+            self.whisper_var.set("Normal")
+            self.duracion_var.set("Completo")
+            self.font_size_var.set(50)
+            self.alpha_var.set(False)
+            self.modo_var.set("Karaoke")
+            self.estilo_kinetic_var.set("Wave")
+            self.fuente_var.set("Arial")
+            self.formato_var.set("MP4")
+            self.lyrics_pos_var.set("Centro")
+            self.lyrics_margin_var.set(40)
+            self.chk_particulas.set(True)
+            self.chk_onda.set(True)
+            self.chk_vineta.set(True)
+            self.chk_glow.set(True)
+            self.chk_barra.set(True)
+            self.chk_text_box.set(False)
+            self.text_box_opacity_var.set(70)
+            self.text_box_radius_var.set(8)
+            self.chk_dim_bg.set(True)
+            # Spot
+            self.spot_enabled.set(False)
+            self.spot_type.set("Texto")
+            self.spot_file.set("")
+            self.spot_text.set("Escuchala en todas las plataformas")
+            self.spot_subtext.set("@dudiver")
+            self.spot_duration.set("5 seg")
+            # Plataformas
+            for k, v in self.platform_vars.items():
+                if k.endswith("_enabled"):
+                    v.set(False)
+                else:
+                    v.set("")
+
+            # ── 5. Limpiar widgets de texto ────────────────────────────────────
+            self.files_panel.letra_text.delete("1.0", "end")
+
+            # Limpiar log
+            self.log_text.configure(state="normal")
+            self.log_text.delete("1.0", "end")
+            self.log_text.configure(state="disabled")
+
+            # Limpiar preview
+            self.preview_panel.clear_preview()
+            self.preview_panel.hide_range()
+
+        finally:
+            self._loading_project = False
+
+        self._set_status("Listo — proyecto nuevo", 0)
+        self.toolbar.set_status("Listo — proyecto nuevo")
+        self._log("✓ Proyecto cerrado. Listo para nueva canción.")
 
     def _save_project(self):
         from tkinter import filedialog

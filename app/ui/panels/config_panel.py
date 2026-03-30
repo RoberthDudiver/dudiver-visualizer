@@ -62,6 +62,9 @@ class ConfigPanel(ctk.CTkFrame):
                  modo_var, estilo_kinetic_var, fuente_var,
                  formato_var=None,
                  chk_particulas, chk_onda, chk_vineta, chk_glow, chk_barra,
+                 lyrics_pos_var=None, lyrics_margin_var=None,
+                 chk_text_box=None, text_box_opacity_var=None,
+                 text_box_radius_var=None, chk_dim_bg=None,
                  all_inputs):
         super().__init__(parent, fg_color=DARK, corner_radius=0)
 
@@ -141,6 +144,110 @@ class ConfigPanel(ctk.CTkFrame):
                                  checkbox_width=18, checkbox_height=18)
             cb.grid(row=i // 2, column=i % 2, sticky="w", padx=4, pady=1)
             all_inputs.append(cb)
+
+        # ── RECUADRO TEXTO ──
+        if chk_text_box is not None:
+            create_section(self, "Recuadro Texto")
+            box_card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
+            box_card.pack(fill="x", padx=4, pady=(0, 4))
+
+            # Fila 1: checkbox activar + checkbox dim video
+            row1 = ctk.CTkFrame(box_card, fg_color="transparent")
+            row1.pack(fill="x", padx=8, pady=(6, 2))
+            cb_box = ctk.CTkCheckBox(row1, text="Activar recuadro",
+                                     variable=chk_text_box,
+                                     font=("Segoe UI", 10), fg_color=ACCENT,
+                                     hover_color=ACCENT_H, corner_radius=4,
+                                     checkbox_width=18, checkbox_height=18)
+            cb_box.pack(side="left")
+            all_inputs.append(cb_box)
+
+            if chk_dim_bg is not None:
+                cb_dim = ctk.CTkCheckBox(row1, text="Oscurecer fondo",
+                                         variable=chk_dim_bg,
+                                         font=("Segoe UI", 10), fg_color=ACCENT,
+                                         hover_color=ACCENT_H, corner_radius=4,
+                                         checkbox_width=18, checkbox_height=18)
+                cb_dim.pack(side="right")
+                all_inputs.append(cb_dim)
+
+            # Slider opacidad
+            if text_box_opacity_var is not None:
+                op_cell = ctk.CTkFrame(box_card, fg_color="transparent")
+                op_cell.pack(fill="x", padx=8, pady=(2, 2))
+                self._op_label = ctk.CTkLabel(op_cell,
+                                              text=f"Opacidad: {text_box_opacity_var.get()}%",
+                                              font=("Segoe UI", 9), text_color=DIM, anchor="w")
+                self._op_label.pack(anchor="w")
+                op_slider = ctk.CTkSlider(op_cell, from_=0, to=100,
+                                          variable=text_box_opacity_var,
+                                          fg_color=INPUT_BG, progress_color=ACCENT,
+                                          button_color=GOLD, button_hover_color=ACCENT_H,
+                                          height=14,
+                                          command=lambda v: self._op_label.configure(
+                                              text=f"Opacidad: {int(v)}%"))
+                op_slider.pack(fill="x")
+                all_inputs.append(op_slider)
+
+            # Slider radio esquinas
+            if text_box_radius_var is not None:
+                rd_cell = ctk.CTkFrame(box_card, fg_color="transparent")
+                rd_cell.pack(fill="x", padx=8, pady=(2, 6))
+                self._rd_label = ctk.CTkLabel(rd_cell,
+                                              text=f"Redondeo: {text_box_radius_var.get()} px",
+                                              font=("Segoe UI", 9), text_color=DIM, anchor="w")
+                self._rd_label.pack(anchor="w")
+                rd_slider = ctk.CTkSlider(rd_cell, from_=0, to=40,
+                                          variable=text_box_radius_var,
+                                          fg_color=INPUT_BG, progress_color=ACCENT,
+                                          button_color=GOLD, button_hover_color=ACCENT_H,
+                                          height=14,
+                                          command=lambda v: self._rd_label.configure(
+                                              text=f"Redondeo: {int(v)} px"))
+                rd_slider.pack(fill="x")
+                all_inputs.append(rd_slider)
+
+        # ── POSICIÓN LETRA ──
+        if lyrics_pos_var is not None and lyrics_margin_var is not None:
+            create_section(self, "Posición Letra")
+            pos_card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
+            pos_card.pack(fill="x", padx=4, pady=(0, 4))
+
+            # Fila: dropdown posición
+            pos_row = ctk.CTkFrame(pos_card, fg_color="transparent")
+            pos_row.pack(fill="x", padx=8, pady=(6, 2))
+            ctk.CTkLabel(pos_row, text="Posición", font=("Segoe UI", 9),
+                         text_color=DIM, width=50, anchor="w").pack(side="left")
+            pos_dd = ctk.CTkOptionMenu(pos_row, variable=lyrics_pos_var,
+                                       values=["Arriba", "Centro", "Abajo"],
+                                       font=("Segoe UI", 10), fg_color=INPUT_BG,
+                                       button_color="#2a2a4a", button_hover_color=ACCENT,
+                                       dropdown_fg_color=CARD, dropdown_hover_color=ACCENT,
+                                       corner_radius=6, height=26)
+            pos_dd.pack(side="right", fill="x", expand=True)
+            all_inputs.append(pos_dd)
+
+            # Fila: slider margen
+            mg_cell = ctk.CTkFrame(pos_card, fg_color="transparent")
+            mg_cell.pack(fill="x", padx=8, pady=(2, 6))
+            self._mg_label = ctk.CTkLabel(mg_cell,
+                                          text=f"Margen: {lyrics_margin_var.get()} px",
+                                          font=("Segoe UI", 9), text_color=DIM, anchor="w")
+            self._mg_label.pack(anchor="w")
+            mg_slider = ctk.CTkSlider(mg_cell, from_=0, to=200,
+                                      variable=lyrics_margin_var,
+                                      fg_color=INPUT_BG, progress_color=ACCENT,
+                                      button_color=GOLD, button_hover_color=ACCENT_H,
+                                      height=14,
+                                      command=lambda v: self._mg_label.configure(
+                                          text=f"Margen: {int(v)} px"))
+            mg_slider.pack(fill="x")
+            all_inputs.append(mg_slider)
+
+            # Hint drag
+            ctk.CTkLabel(pos_card, text="Arrastra las letras en la preview",
+                         font=("Segoe UI", 8), text_color=DIM,
+                         fg_color="transparent").pack(pady=(0, 4))
 
         # Init visibility
         self._update_mode(modo_var.get())

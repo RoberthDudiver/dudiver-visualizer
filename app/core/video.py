@@ -88,6 +88,7 @@ class VideoGenerator:
         spot_secs = cfg["spot_secs"]
 
         from moviepy import AudioFileClip, VideoClip, VideoFileClip
+        import moviepy.audio.fx as afx
 
         self.on_progress("Cargando audio...", 2)
         self.on_log(f"Audio: {os.path.basename(audio_path)}")
@@ -99,13 +100,14 @@ class VideoGenerator:
             self.on_log(f"Duracion limitada a {max_dur}s")
 
         # Audio fade out (3s) cuando no es completo o hay spot
+        # MoviePy v2.x: audio_clip.audio_fadeout(dur) → with_effects([afx.AudioFadeOut(dur)])
         fade_dur = 3.0
         if max_dur > 0 and max_dur < audio_clip.duration:
             audio_clip = audio_clip.subclipped(start_time, start_time + duracion)
-            audio_clip = audio_clip.audio_fadeout(fade_dur)
+            audio_clip = audio_clip.with_effects([afx.AudioFadeOut(fade_dur)])
             self.on_log(f"Audio fade out: {fade_dur}s")
         elif spot_on:
-            audio_clip = audio_clip.audio_fadeout(fade_dur)
+            audio_clip = audio_clip.with_effects([afx.AudioFadeOut(fade_dur)])
 
         total_dur = duracion + (spot_secs if spot_on else 0)
 
@@ -208,7 +210,11 @@ class VideoGenerator:
                 t = fn / fps
                 if t < duracion:
                     frame = crear_frame_alpha(ancho, alto, timing, t, duracion,
-                                              beat_times, fuente, fuente_titulo, titulo)
+                                              beat_times, fuente, fuente_titulo, titulo,
+                                              lyrics_pos=self.cfg.get("lyrics_pos", "Centro"),
+                                              lyrics_margin=self.cfg.get("lyrics_margin", 40),
+                                              lyrics_extra_y=self.cfg.get("lyrics_extra_y", 0),
+                                              effects=self.cfg.get("effects"))
                     if spot_on and (duracion - t) < 2.0:
                         fade = (duracion - t) / 2.0
                         arr = np.array(frame)
@@ -273,9 +279,11 @@ class VideoGenerator:
                        spot_text, spot_subtext, spot_file, spot_secs):
         """Render en modo normal (MP4 con moviepy)."""
         from moviepy import VideoClip
+        import time as _time_mod
 
         self.on_progress("Generando video...", 15)
-        count = [0]
+        _last_progress_wall = [0.0]
+        _render_start = [_time_mod.time()]
 
         def make_frame(t):
             if self.is_cancelled():
@@ -295,7 +303,10 @@ class VideoGenerator:
                                      beat_times, (rms, rms_times), esquema,
                                      fuente, fuente_titulo, fuente_peq,
                                      parts, titulo, cur_bg,
-                                     effects=self.cfg.get("effects"))
+                                     effects=self.cfg.get("effects"),
+                                     lyrics_pos=self.cfg.get("lyrics_pos", "Centro"),
+                                     lyrics_margin=self.cfg.get("lyrics_margin", 40),
+                                     lyrics_extra_y=self.cfg.get("lyrics_extra_y", 0))
 
             left = duracion - t
             if spot_on and left < 2.0:
@@ -307,10 +318,19 @@ class VideoGenerator:
                 ov = Image.new("RGBA", (ancho, alto), (0, 0, 0, fa))
                 img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
 
-            count[0] += 1
-            if count[0] % (fps * 2) == 0:
+            # Actualizar progreso cada 0.25s de tiempo real (no de video)
+            now = _time_mod.time()
+            if now - _last_progress_wall[0] >= 0.25:
+                _last_progress_wall[0] = now
                 pct = 15 + (t / total_dur) * 80
-                self.on_progress(f"{t:.0f}s / {total_dur:.0f}s", pct)
+                elapsed = now - _render_start[0]
+                if t > 0 and elapsed > 0:
+                    fps_real = t / elapsed
+                    remaining = (total_dur - t) / fps_real if fps_real > 0 else 0
+                    msg = f"{t:.0f}s/{total_dur:.0f}s  — {remaining:.0f}s restantes"
+                else:
+                    msg = f"{t:.0f}s / {total_dur:.0f}s"
+                self.on_progress(msg, pct)
 
             return np.array(img)
 
@@ -358,6 +378,7 @@ class VideoGenerator:
 
             # Buscar timestamps: primero whisper_raw embebido, luego archivo externo
             ts_path = None
+            whisper_ts = None  # ruta a archivo externo (puede ser None si no existe)
             whisper_raw = cfg.get("whisper_raw")
 
             if whisper_raw and isinstance(whisper_raw, dict) and whisper_raw.get("palabras"):
@@ -406,6 +427,10 @@ class VideoGenerator:
                 "spot_secs": cfg.get("spot_secs", 5),
                 "start_time": cfg.get("start_time", 0),
                 "platform_urls": cfg.get("platform_urls"),
+                # Posición de letra (crítico para que render = preview)
+                "lyrics_pos": cfg.get("lyrics_pos", "Centro"),
+                "lyrics_margin": cfg.get("lyrics_margin", 40),
+                "lyrics_extra_y": cfg.get("lyrics_extra_y", 0),
             }
 
             self.on_log(f"Fuente: {pil_config['fuente']}")

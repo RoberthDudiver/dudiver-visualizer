@@ -67,8 +67,8 @@ def render_subprocess(config):
             is_cancelled=lambda: False,
         )
         gen.run()
-
-        on_progress("Completado", 100)
+        # Nota: VideoGenerator ya llama on_progress("Completado", 100) internamente
+        # cuando tiene éxito. No sobreescribir aquí para no ocultar errores.
     except Exception:
         err_log = config.get("output_path", "output") + ".error.log"
         with open(err_log, "w") as f:

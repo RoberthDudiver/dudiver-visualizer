@@ -87,9 +87,9 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext,
             (ancho, alto), Image.Resampling.LANCZOS)
         alpha = min(1.0, t_spot / 1.5)
         img = Image.blend(img, spot_img, alpha)
-        # Texto y QR encima de la imagen
-        _draw_spot_overlay(img, ancho, alto, alpha, spot_text, spot_subtext,
-                           platform_urls)
+        # Solo QR codes si están configurados (sin texto — la imagen ya tiene su diseño)
+        if platform_urls:
+            _draw_platform_qrs(img, ancho, alto, alpha, platform_urls)
 
     elif spot_type == "Video" and spot_file and os.path.isfile(spot_file):
         try:
@@ -101,10 +101,10 @@ def create_spot_frame(ancho, alto, t_spot, spot_type, spot_text, spot_subtext,
             img = Image.blend(img, spot_img, alpha)
         except Exception:
             pass
-        # Texto y QR encima del video
-        alpha = min(1.0, t_spot / 1.5)
-        _draw_spot_overlay(img, ancho, alto, alpha, spot_text, spot_subtext,
-                           platform_urls)
+        # Solo QR codes si están configurados (sin texto — el video ya tiene su diseño)
+        if platform_urls:
+            alpha = min(1.0, t_spot / 1.5)
+            _draw_platform_qrs(img, ancho, alto, alpha, platform_urls)
 
     return img
 

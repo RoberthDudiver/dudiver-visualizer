@@ -310,6 +310,13 @@ class KineticPILRenderer:
         self.fondo_path = config.get("fondo_path")
         self.alpha_mode = config.get("alpha_mode", False)
         self.effects = config.get("effects")
+        self.lyrics_pos = config.get("lyrics_pos", "Centro")
+        self.lyrics_margin = config.get("lyrics_margin", 40)
+        self.lyrics_extra_y = config.get("lyrics_extra_y", 0)
+        self._bg_is_video = False
+        self._bg_cap = None
+        self._bg_video_fps = 30
+        self._bg_video_dur = 0
         self.cache = TextCache()
 
     @staticmethod
@@ -390,8 +397,16 @@ class KineticPILRenderer:
 
         # Agrupar palabras inteligentemente
         if self.estilo == "oneword":
-            palabras = group_smart_oneword(palabras)
-            self.on_log(f"Oneword inteligente: {len(palabras)} grupos")
+            if palabras:
+                palabras = group_smart_oneword(palabras)
+                self.on_log(f"Oneword inteligente: {len(palabras)} grupos")
+            elif segmentos:
+                # Fallback: sin palabras individuales, usar segmentos de línea
+                palabras = [{"inicio": s["inicio"], "fin": s["fin"],
+                             "palabra": s.get("linea", s.get("texto", ""))}
+                            for s in segmentos
+                            if s.get("linea", s.get("texto", "")).strip()]
+                self.on_log(f"Oneword fallback (segmentos): {len(palabras)} entradas")
         frases = group_into_phrases(palabras) if palabras else []
 
         # Output
@@ -447,8 +462,13 @@ class KineticPILRenderer:
                         frame = self._render_oneword_frame(
                             t, bg_img, palabras, beat_times, anim_fn)
                     else:
+                        # Usar segmentos (líneas) para display multi-línea fiel al preview
+                        lineas_display = segmentos if segmentos else [
+                            {"linea": " ".join(w["palabra"] for w in frase),
+                             "inicio": frase[0]["inicio"], "fin": frase[-1]["fin"]}
+                            for frase in frases]
                         frame = self._render_phrase_frame(
-                            t, bg_img, frases, beat_times, anim_fn)
+                            t, bg_img, lineas_display, beat_times, anim_fn)
 
                     # Aplicar efectos
                     frame = self._apply_effects(frame, t, total_dur, beat_times)
@@ -498,6 +518,14 @@ class KineticPILRenderer:
                 proc.terminate()
                 proc.wait(timeout=10)
             stderr_file.close()
+
+            # Liberar cap de video si se usó
+            if self._bg_cap is not None:
+                try:
+                    self._bg_cap.release()
+                except Exception:
+                    pass
+                self._bg_cap = None
 
             elapsed = int(time.time() - start)
             if proc.returncode == 0 and os.path.isfile(output):
@@ -580,18 +608,43 @@ class KineticPILRenderer:
         bg_color = (0, 0, 0, 0) if self.alpha_mode else (8, 8, 16)
 
         if self.fondo_path and os.path.isfile(self.fondo_path):
+            ext = os.path.splitext(self.fondo_path)[1].lower()
+
+            # Video de fondo
+            if ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+                try:
+                    import cv2
+                    cap = cv2.VideoCapture(self.fondo_path)
+                    if cap.isOpened():
+                        self._bg_is_video = True
+                        self._bg_cap = cap
+                        self._bg_video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+                        total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                        self._bg_video_dur = total_f / self._bg_video_fps if self._bg_video_fps > 0 else 1
+                        self._bg_mode = mode
+                        self._bg_size = (self.ancho, self.alto)
+                        # Imagen de relleno para _fast_bg_copy (no se usa en video mode)
+                        fallback = Image.new(mode, (self.ancho, self.alto), bg_color)
+                        self._bg_bytes = fallback.tobytes()
+                        return fallback
+                except Exception:
+                    pass
+
+            # Imagen de fondo
             try:
                 bg = Image.open(self.fondo_path).resize(
                     (self.ancho, self.alto), Image.LANCZOS).convert(mode)
                 from PIL import ImageEnhance
-                bg = ImageEnhance.Brightness(bg).enhance(0.25)
-                # Pre-cache bytes para copy rápido per-frame
+                dim = self.effects.get("dim_bg", True) if self.effects else True
+                brightness = 0.2 if dim else 1.0
+                bg = ImageEnhance.Brightness(bg).enhance(brightness)
                 self._bg_bytes = bg.tobytes()
                 self._bg_mode = mode
                 self._bg_size = (self.ancho, self.alto)
                 return bg
             except Exception:
                 pass
+
         bg = Image.new(mode, (self.ancho, self.alto), bg_color)
         self._bg_bytes = bg.tobytes()
         self._bg_mode = mode
@@ -601,6 +654,67 @@ class KineticPILRenderer:
     def _fast_bg_copy(self):
         """Copia rápida del fondo usando frombytes (más rápido que PIL .copy())."""
         return Image.frombytes(self._bg_mode, self._bg_size, self._bg_bytes)
+
+    def _get_bg_frame(self, t):
+        """Retorna el frame de fondo para el tiempo t (con loop para videos)."""
+        if self._bg_is_video and self._bg_cap is not None:
+            try:
+                import cv2
+                from PIL import ImageEnhance
+                t_video = t % self._bg_video_dur if self._bg_video_dur > 0 else 0
+                frame_idx = int(t_video * self._bg_video_fps)
+                self._bg_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = self._bg_cap.read()
+                if ret:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame).resize(
+                        (self.ancho, self.alto), Image.LANCZOS)
+                    dim = self.effects.get("dim_bg", True) if self.effects else True
+                    brightness = 0.2 if dim else 1.0
+                    img = ImageEnhance.Brightness(img.convert(self._bg_mode)).enhance(brightness)
+                    return img
+            except Exception:
+                pass
+        return self._fast_bg_copy()
+
+    def _calc_lyrics_y(self, total_h):
+        """Calcula el Y de inicio del bloque de letras según posición configurada."""
+        pos = self.lyrics_pos
+        margin = self.lyrics_margin
+        offset = self.lyrics_extra_y
+        if pos == "Arriba":
+            base_y = margin
+        elif pos == "Abajo":
+            base_y = self.alto - total_h - margin
+        else:
+            base_y = (self.alto - total_h) // 2
+        base_y += offset
+        return max(0, min(self.alto - max(total_h, 1), base_y))
+
+    def _draw_kinetic_text_box(self, frame, cx, y, text_w, text_h):
+        """Dibuja recuadro detrás del texto kinetic si está activado."""
+        if not (self.effects and self.effects.get("text_box", False)):
+            return frame
+        opacity = int(self.effects.get("text_box_opacity", 70) * 2.55)
+        radius = int(self.effects.get("text_box_radius", 8))
+        pad_x, pad_y = 18, 6
+        x1 = cx - text_w // 2 - pad_x
+        y1 = y - pad_y
+        x2 = cx + text_w // 2 + pad_x
+        y2 = y + text_h + pad_y
+        # Color oscuro de fondo para kinetic
+        box_color = (0, 0, 0)
+        overlay = Image.new('RGBA', frame.size, (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(overlay)
+        r_min = min(radius, (x2 - x1) // 2, (y2 - y1) // 2)
+        fill = (*box_color, opacity)
+        if r_min > 0:
+            odraw.rounded_rectangle([x1, y1, x2, y2], radius=r_min, fill=fill)
+        else:
+            odraw.rectangle([x1, y1, x2, y2], fill=fill)
+        if frame.mode == 'RGBA':
+            return Image.alpha_composite(frame, overlay)
+        return Image.alpha_composite(frame.convert('RGBA'), overlay).convert('RGB')
 
     def _make_font(self, size):
         try:
@@ -631,18 +745,27 @@ class KineticPILRenderer:
 
     def _render_oneword_frame(self, t, bg_img, palabras, beat_times, anim_fn):
         """Frame para estilo One Word: una palabra gigante centrada."""
-        frame = self._fast_bg_copy()
+        frame = self._get_bg_frame(t)
         if not palabras:
             return frame
 
         # Encontrar palabra activa
         word = None
+        prev_word = None
         for w in palabras:
             if w["inicio"] <= t <= w["fin"]:
                 word = w
                 break
             if w["inicio"] > t:
+                # Entre palabras: mostrar la anterior
+                if prev_word:
+                    word = prev_word
+                else:
+                    word = w  # antes del inicio: mostrar la primera
                 break
+            prev_word = w
+        if not word and palabras:
+            word = palabras[-1]  # después del final: mostrar la última
 
         if not word:
             return frame
@@ -666,12 +789,18 @@ class KineticPILRenderer:
             scale *= (self.ancho * 0.85) / (text_img.width * scale)
 
         cx = self.ancho // 2 + x_off
-        cy = self.alto // 2 + y_off
+        base_cy = self._calc_lyrics_y(big_size) + big_size // 2
+        cy = base_cy + y_off
 
         # Beat pulse
         bi = beat_intensity(t, beat_times)
         if bi > 0.3:
             scale *= 1.0 + bi * 0.12
+
+        # Recuadro detrás del texto
+        actual_w = int(text_img.width * scale)
+        actual_h = int(text_img.height * scale)
+        frame = self._draw_kinetic_text_box(frame, cx, cy - actual_h // 2, actual_w, actual_h)
 
         # Glow (cacheado: blur es costoso)
         if alpha > 50:
@@ -689,51 +818,119 @@ class KineticPILRenderer:
 
         return frame
 
-    def _render_phrase_frame(self, t, bg_img, frases, beat_times, anim_fn):
-        """Frame para estilos por frase (wave, zoom, slide, etc.)."""
-        frame = self._fast_bg_copy()
-        if not frases:
+    def _render_phrase_frame(self, t, bg_img, lineas, beat_times, anim_fn):
+        """Frame multi-línea: muestra ventana de líneas con la activa destacada (idéntico al preview)."""
+        frame = self._get_bg_frame(t)
+        if not lineas:
             return frame
 
-        # Encontrar frase activa
-        active_frase_idx = 0
-        for i, frase in enumerate(frases):
-            if frase[0]["inicio"] <= t <= frase[-1]["fin"] + 0.3:
-                active_frase_idx = i
+        # Encontrar línea activa
+        active_idx = 0
+        for i, ln in enumerate(lineas):
+            inicio = float(ln.get("inicio", 0))
+            fin = float(ln.get("fin", 0))
+            if inicio <= t <= fin + 0.5:
+                active_idx = i
                 break
-            if frase[0]["inicio"] > t:
-                active_frase_idx = max(0, i - 1)
+            if inicio > t:
+                active_idx = max(0, i - 1)
                 break
         else:
-            if frases and t > frases[-1][-1]["fin"]:
-                active_frase_idx = len(frases) - 1
+            active_idx = len(lineas) - 1
 
-        # Ventana de frases visibles
-        max_visible = 5
-        start = max(0, active_frase_idx - 1)
-        end = min(len(frases), start + max_visible)
-        visible = list(range(start, end))
+        # Ventana de líneas visibles (igual que preview: 2 líneas antes de la activa)
+        max_visible = 7
+        start = max(0, active_idx - 2)
+        end = min(len(lineas), start + max_visible)
 
-        line_h = int(self.font_size * 1.8)
-        y_center = self.alto // 2
-        y_start = y_center - (len(visible) * line_h) // 2
+        line_h = int(self.font_size * 1.6)
+        total_h = (end - start) * line_h
+        y_start = self._calc_lyrics_y(total_h)
 
-        for vi, fi in enumerate(visible):
-            frase = frases[fi]
-            y_line = y_start + vi * line_h
+        font = self._make_font(self.font_size)
+        bi = beat_intensity(t, beat_times)
 
-            if fi < active_frase_idx:
-                # Frase pasada
-                self._draw_phrase_text(frame, frase, y_line,
-                                       self.esquema["pasado"], 150)
-            elif fi > active_frase_idx:
-                # Frase futura
-                self._draw_phrase_text(frame, frase, y_line,
-                                       self.esquema["futuro"], 100)
+        for vi, li in enumerate(range(start, end)):
+            ln = lineas[li]
+            texto = ln.get("linea", ln.get("texto", ""))
+            if not texto.strip():
+                continue
+            y = y_start + vi * line_h
+
+            is_active = (li == active_idx)
+            is_past = li < active_idx
+
+            # Escalar fuente si el texto es muy ancho
+            tmp = self._render_text_img(texto, self.font_size,
+                                        self.esquema["activo"])
+            scale = min(1.0, (self.ancho * 0.88) / tmp.width) if tmp.width > 0 else 1.0
+            sz = int(self.font_size * scale)
+            if is_active:
+                # Tamaño ligeramente mayor para la línea activa
+                sz = int(sz * 1.15)
+
+            # Recuadro detrás del texto
+            if self.effects and self.effects.get("text_box", False):
+                text_w = int(tmp.width * scale)
+                if is_active:
+                    text_w = int(text_w * 1.15)  # Igualar al tamaño real de la línea activa
+                frame = self._draw_kinetic_text_box(frame, self.ancho // 2,
+                                                    y, text_w, line_h)
+
+            if is_active:
+                color = self.esquema["activo"]
+                # Progreso dentro de la línea activa para la animación
+                ln_inicio = float(ln.get("inicio", 0))
+                ln_fin = float(ln.get("fin", ln_inicio + 1))
+                dur_ln = max(ln_fin - ln_inicio, 0.05)
+                progress = min(1.0, max(0.0, (t - ln_inicio) / dur_ln))
+                x_off, y_off, anim_scale, anim_alpha = anim_fn(progress, 0,
+                                                                self.ancho, self.alto)
+
+                # Typewriter: mostrar texto parcialmente
+                if self.estilo == "typewriter" and progress < 1.0:
+                    chars = max(1, int(progress * len(texto)))
+                    texto_anim = texto[:chars]
+                else:
+                    texto_anim = texto
+
+                final_sz = int(sz * anim_scale)
+                # Beat pulse
+                if bi > 0.3:
+                    final_sz = int(final_sz * (1.0 + bi * 0.06))
+                alpha = max(60, int(anim_alpha))
+
+                # Glow
+                glow_key = (texto_anim, final_sz, "glow_ml")
+                if glow_key not in self.cache._cache:
+                    gi = self._render_text_img(texto_anim, final_sz,
+                                               self.esquema["glow"])
+                    self.cache._cache[glow_key] = gi.filter(
+                        ImageFilter.GaussianBlur(radius=6))
+                self._composite_text(frame, self.cache._cache[glow_key],
+                                     self.ancho // 2 + x_off,
+                                     y + line_h // 2 + y_off,
+                                     scale=1.0, alpha=60)
+
+                text_img = self._render_text_img(texto_anim, final_sz, color)
+                self._composite_text(frame, text_img,
+                                     self.ancho // 2 + x_off,
+                                     y + line_h // 2 + y_off,
+                                     scale=1.0, alpha=alpha)
+            elif is_past:
+                color = self.esquema["pasado"]
+                alpha = 160
+                text_img = self._render_text_img(texto, sz, color)
+                self._composite_text(frame, text_img,
+                                     self.ancho // 2, y + line_h // 2,
+                                     scale=1.0, alpha=alpha)
             else:
-                # Frase activa — word by word
-                self._draw_active_phrase(frame, frase, y_line, t,
-                                         beat_times, anim_fn)
+                color = self.esquema["futuro"]
+                alpha = 110
+                text_img = self._render_text_img(texto, sz, color)
+                self._composite_text(frame, text_img,
+                                     self.ancho // 2, y + line_h // 2,
+                                     scale=1.0, alpha=alpha)
 
         return frame
 
@@ -834,16 +1031,16 @@ class KineticPILRenderer:
             x += ww + space_w * scale_factor
 
     def _build_vignette(self):
-        """Pre-renderiza viñeta una sola vez (cacheada como RGBA para paste)."""
+        """Pre-renderiza viñeta una sola vez (cacheada como RGBA para paste).
+        Parámetros idénticos al preview (_apply_kinetic_effects)."""
         if hasattr(self, "_vignette_cache"):
             return self._vignette_cache
         vignette = Image.new("RGBA", (self.ancho, self.alto), (0, 0, 0, 0))
         vd = ImageDraw.Draw(vignette)
-        for i in range(30):
-            a = int(150 * (1 - i / 30))
+        for i in range(40):
+            a = int(180 * (1 - i / 40))  # Idéntico al preview (_apply_kinetic_effects)
             vd.rectangle([i, i, self.ancho - i, self.alto - i],
                          outline=(0, 0, 0, a))
-        # Pre-convertir a RGB si no es alpha mode (para paste directo)
         self._vignette_cache = vignette
         return self._vignette_cache
 
@@ -861,6 +1058,7 @@ class KineticPILRenderer:
             frame.paste(vignette, (0, 0), vignette)
 
         # Glow global (downscale → blur → upscale, cada 3 frames para performance)
+        # Parámetros alineados con preview: blend factor 0.15
         if effects.get("glow", False):
             frame_idx = int(t * self.fps)
             if frame_idx % 3 == 0 or not hasattr(self, "_glow_cache"):
@@ -869,27 +1067,30 @@ class KineticPILRenderer:
                 small = small.filter(ImageFilter.GaussianBlur(3))
                 self._glow_cache = small.resize(
                     (self.ancho, self.alto), Image.BILINEAR)
-            frame = Image.blend(frame, self._glow_cache, 0.12)
+            frame = Image.blend(frame, self._glow_cache, 0.15)
 
-        # Partículas
+        # Partículas — idéntico al preview: 25 partículas con alpha variable
         if effects.get("particulas", False):
             draw = ImageDraw.Draw(frame)
             random.seed(int(t * 10))
-            for _ in range(20):
+            color_p = self.esquema.get("activo", "#ffffff") if isinstance(self.esquema, dict) else "#ffffff"
+            for _ in range(25):
                 px = random.randint(0, self.ancho)
                 py = random.randint(0, self.alto)
                 sz = random.randint(1, 3)
+                alpha_hex = format(random.randint(40, 160), '02x')
                 draw.ellipse([px, py, px + sz, py + sz],
-                             fill=self.esquema["activo"])
+                             fill=color_p + alpha_hex)
 
-        # Onda
+        # Onda — parámetros idénticos al preview
         if effects.get("onda", False):
             draw = ImageDraw.Draw(frame)
-            y_base = self.alto - 25
-            for x in range(0, self.ancho, 3):
-                y = y_base + int(6 * math.sin((x + t * 80) * 0.03))
-                draw.line([(x, y), (x + 3, y)],
-                          fill=self.esquema["glow"], width=2)
+            y_base = self.alto - 30
+            color_w = self.esquema.get("glow", "#4040ff") if isinstance(self.esquema, dict) else "#4040ff"
+            for x in range(0, self.ancho, 2):
+                y_w = y_base + int(8 * math.sin((x + t * 100) * 0.03))
+                draw.line([(x, y_w), (x + 2, y_w)],
+                          fill=color_w + "60", width=2)
 
         # Barra de progreso
         if effects.get("barra", False):
@@ -900,7 +1101,60 @@ class KineticPILRenderer:
             draw.rectangle([0, bar_y, self.ancho, self.alto], fill="#1a1a2e")
             if bar_w > 0:
                 draw.rectangle([0, bar_y, bar_w, self.alto],
-                               fill=self.esquema["activo"])
+                               fill=self.esquema.get("activo", "#e94560"))
+
+        return frame
+
+
+    def render_single_frame(self, t, ts_path, total_dur=180):
+        """Renderiza UN frame en el tiempo t — idéntico al video real (para preview)."""
+        # Cargar timestamps
+        if ts_path and os.path.isfile(ts_path):
+            palabras, segmentos = load_timestamps(ts_path)
+        else:
+            palabras, segmentos = [], []
+
+        # Agrupar igual que en render()
+        if self.estilo == "oneword":
+            if palabras:
+                palabras = group_smart_oneword(palabras)
+            elif segmentos:
+                palabras = [{"inicio": s["inicio"], "fin": s["fin"],
+                             "palabra": s.get("linea", s.get("texto", ""))}
+                            for s in segmentos
+                            if s.get("linea", s.get("texto", "")).strip()]
+        frases = group_into_phrases(palabras) if palabras else []
+
+        # Preparar fondo (inicializa _bg_is_video, _bg_cap, etc.)
+        self._load_background()
+
+        # Beat times vacíos para preview (sin análisis de audio)
+        beat_times = []
+
+        # Función de animación
+        anim_fn = ANIM_STYLES.get(self.estilo, _anim_wave)
+
+        # Líneas para display (segmentos > frases)
+        lineas_display = segmentos if segmentos else [
+            {"linea": " ".join(w["palabra"] for w in frase),
+             "inicio": frase[0]["inicio"], "fin": frase[-1]["fin"]}
+            for frase in frases]
+
+        # Generar frame
+        if not palabras and not lineas_display:
+            frame = self._get_bg_frame(t)
+        elif self.estilo == "oneword":
+            frame = self._render_oneword_frame(t, None, palabras, beat_times, anim_fn)
+        else:
+            frame = self._render_phrase_frame(t, None, lineas_display, beat_times, anim_fn)
+
+        # Efectos visuales
+        frame = self._apply_effects(frame, t, total_dur, beat_times)
+
+        # Liberar captura de video si la hay
+        if self._bg_cap:
+            self._bg_cap.release()
+            self._bg_cap = None
 
         return frame
 
