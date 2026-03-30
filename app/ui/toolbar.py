@@ -111,9 +111,9 @@ class Toolbar(ctk.CTkFrame):
                           ).pack(side="right", padx=3)
 
         if on_new_project:
-            ctk.CTkButton(self, text="＋ Nuevo", height=34, width=72,
-                          font=("Segoe UI Semibold", 11), fg_color="#1a3a1a",
-                          hover_color="#2a5a2a", text_color="#66ff66",
+            ctk.CTkButton(self, text="\U0001f4c4", height=34, width=34,
+                          font=("Segoe UI Emoji", 16), fg_color="#2a2a4a",
+                          hover_color="#3a3a5a",
                           corner_radius=8, command=on_new_project
                           ).pack(side="right", padx=3)
 
