@@ -165,6 +165,7 @@ class VisualizerApp(ctk.CTk):
                                on_help=self._open_help,
                                on_save_project=self._save_project,
                                on_open_project=self._open_project,
+                               on_new_project=self._new_project,
                                all_inputs=self._all_inputs)
         self.toolbar.pack(fill="x")
 
@@ -1473,6 +1474,106 @@ class VisualizerApp(ctk.CTk):
 
     def _open_help(self):
         HelpWindow(self)
+
+    def _new_project(self):
+        """Cierra el proyecto actual (guardando) y limpia todo para una canción nueva."""
+        # ── 1. Guardar proyecto actual silenciosamente ──────────────────────────
+        if self._save_pending:
+            self.after_cancel(self._save_pending)
+            self._save_pending = None
+        # Auto-guardar si hay un .dudi activo o hay audio cargado
+        audio_actual = self.audio_path.get()
+        if audio_actual and os.path.isfile(audio_actual):
+            try:
+                self._do_auto_save()
+            except Exception:
+                pass
+
+        # ── 2. Advertencia ─────────────────────────────────────────────────────
+        titulo_actual = self.titulo_var.get().strip() or "el proyecto actual"
+        respuesta = messagebox.askyesno(
+            "Nuevo proyecto",
+            f"Se cerrará «{titulo_actual}».\n\n"
+            "El proyecto se ha guardado automáticamente.\n\n"
+            "¿Deseas continuar y empezar una canción nueva?",
+            icon="warning",
+        )
+        if not respuesta:
+            return
+
+        # ── 3. Limpiar toda la memoria interna ─────────────────────────────────
+        self._loading_project = True
+        try:
+            with self._data_lock:
+                self._lineas = None
+                self._whisper_raw = None
+                self._dur = 0.0
+            self._dudi_path = None
+            self._lyrics_drag_offset = 0
+            self._preview_scale = 1.0
+            if self._preview_pending:
+                self.after_cancel(self._preview_pending)
+                self._preview_pending = None
+
+            # ── 4. Resetear todas las variables a valores por defecto ──────────
+            self.audio_path.set("")
+            self.letra_path.set("")
+            self.fondo_path.set("")
+            self.titulo_var.set("")
+            self.tamano_var.set("YouTube 1920×1080")
+            self.fps_var.set("30")
+            self.esquema_var.set("Noche")
+            self.whisper_var.set("Normal")
+            self.duracion_var.set("Completo")
+            self.font_size_var.set(50)
+            self.alpha_var.set(False)
+            self.modo_var.set("Karaoke")
+            self.estilo_kinetic_var.set("Wave")
+            self.fuente_var.set("Arial")
+            self.formato_var.set("MP4")
+            self.lyrics_pos_var.set("Centro")
+            self.lyrics_margin_var.set(40)
+            self.chk_particulas.set(True)
+            self.chk_onda.set(True)
+            self.chk_vineta.set(True)
+            self.chk_glow.set(True)
+            self.chk_barra.set(True)
+            self.chk_text_box.set(False)
+            self.text_box_opacity_var.set(70)
+            self.text_box_radius_var.set(8)
+            self.chk_dim_bg.set(True)
+            # Spot
+            self.spot_enabled.set(False)
+            self.spot_type.set("Texto")
+            self.spot_file.set("")
+            self.spot_text.set("Escuchala en todas las plataformas")
+            self.spot_subtext.set("@dudiver")
+            self.spot_duration.set("5 seg")
+            # Plataformas
+            for k, v in self.platform_vars.items():
+                if k.endswith("_enabled"):
+                    v.set(False)
+                else:
+                    v.set("")
+
+            # ── 5. Limpiar widgets de texto ────────────────────────────────────
+            self.files_panel.letra_text.delete("1.0", "end")
+
+            # Limpiar log
+            self.log_text.configure(state="normal")
+            self.log_text.delete("1.0", "end")
+            self.log_text.configure(state="disabled")
+
+            # Limpiar preview
+            self.preview_panel.clear_preview()
+            self.preview_panel.hide_range()
+
+        finally:
+            self._loading_project = False
+
+        self._set_status("Listo — proyecto nuevo", 0)
+        self.toolbar.set_status("Listo — proyecto nuevo")
+        self._log("✓ Proyecto cerrado. Listo para nueva canción.")
 
     def _save_project(self):
         from tkinter import filedialog

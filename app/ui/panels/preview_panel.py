@@ -396,6 +396,17 @@ class PreviewPanel(ctk.CTkFrame):
     def _range_release(self, event):
         self._dragging = None
 
+    def clear_preview(self):
+        """Borra el canvas de preview y detiene cualquier reproducción."""
+        self._stop_audio_playback()
+        self._stop_video()
+        self.preview_canvas.delete("all")
+        self.video_canvas.delete("all")
+        self._video_path = None
+        self._audio_path = None
+        self.timeline.set(0)
+        self.time_label.configure(text="0:00")
+
     def show_range(self, dur_secs, audio_dur):
         """Muestra el range slider y oculta el timeline normal."""
         audio_dur = max(audio_dur, 10)
