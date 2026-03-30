@@ -206,6 +206,15 @@ def get_project_config(app):
         "efx_glow": app.chk_glow.get(),
         "efx_barra": app.chk_barra.get(),
         "formato": app.formato_var.get(),
+        # Posición letra
+        "lyrics_pos": app.lyrics_pos_var.get(),
+        "lyrics_margin": app.lyrics_margin_var.get(),
+        "lyrics_extra_y": app._lyrics_drag_offset,
+        # Recuadro texto
+        "text_box": app.chk_text_box.get(),
+        "text_box_opacity": app.text_box_opacity_var.get(),
+        "text_box_radius": app.text_box_radius_var.get(),
+        "dim_bg": app.chk_dim_bg.get(),
         # Plataformas
         "platforms": {k: v.get() for k, v in app.platform_vars.items()},
     }
@@ -277,6 +286,24 @@ def apply_project(app, config):
             app.chk_barra.set(config["efx_barra"])
         if config.get("formato"):
             app.formato_var.set(config["formato"])
+
+        # Posición letra
+        if config.get("lyrics_pos"):
+            app.lyrics_pos_var.set(config["lyrics_pos"])
+        if "lyrics_margin" in config:
+            app.lyrics_margin_var.set(int(config["lyrics_margin"]))
+        if "lyrics_extra_y" in config:
+            app._lyrics_drag_offset = int(config["lyrics_extra_y"])
+
+        # Recuadro texto
+        if "text_box" in config:
+            app.chk_text_box.set(config["text_box"])
+        if "text_box_opacity" in config:
+            app.text_box_opacity_var.set(int(config["text_box_opacity"]))
+        if "text_box_radius" in config:
+            app.text_box_radius_var.set(int(config["text_box_radius"]))
+        if "dim_bg" in config:
+            app.chk_dim_bg.set(config["dim_bg"])
 
         # Plataformas
         platforms = config.get("platforms", {})
