@@ -92,6 +92,8 @@ class FontComboBox(ctk.CTkFrame):
         self._tags_built = False
         self._last_pos   = (0, 0)   # (x, y) del entry en pantalla
         self._selecting  = False     # flag: no reabrir cuando _select cambia la var
+        self._b_click:   str | None = None
+        self._patched_sf = None
 
         # ── Entry + botón ─────────────────────────────────────────────────
         self.columnconfigure(0, weight=1)
@@ -119,7 +121,8 @@ class FontComboBox(ctk.CTkFrame):
 
         # ── Bindings entry ────────────────────────────────────────────────
         self._search_var.trace_add("write", self._on_type)
-        self._entry.bind("<FocusIn>",  lambda e: self._open())
+        # NO abrir en FocusIn — causaba que el dropdown se abriera al iniciar
+        # la app o al tabular. Solo abre con el botón ▾ o al tipear.
         self._entry.bind("<Return>",   lambda e: self._commit())
         self._entry.bind("<Escape>",   lambda e: self._close())
         self._entry.bind("<Down>",     lambda e: self._move(+1))
@@ -193,9 +196,13 @@ class FontComboBox(ctk.CTkFrame):
         # Si el usuario escribe, _on_type filtra en vivo.
         self._filter("")
 
-        # clic fuera → cerrar
-        popup.bind("<FocusOut>", lambda e: self.after(80, self._check_focus))
-        popup.bind("<Escape>",   lambda e: self._close())
+        popup.bind("<Escape>", lambda e: self._close())
+
+        # clic en cualquier lugar fuera del popup → cerrar
+        root = self.winfo_toplevel()
+        self._b_click = root.bind(
+            "<Button-1>", self._on_global_click, add="+"
+        )
 
         # guardar posición actual del entry y arrancar polling
         self.update_idletasks()
@@ -381,7 +388,32 @@ class FontComboBox(ctk.CTkFrame):
 
     # ── Cerrar ────────────────────────────────────────────────────────────────
 
+    def _on_global_click(self, event):
+        """Clic en cualquier widget: cerrar si es fuera del popup y del combo."""
+        if not self._popup or not self._popup.winfo_exists():
+            return
+        # ¿El clic fue dentro del popup?
+        if _cursor_over(self._popup, event.x_root, event.y_root):
+            return
+        # ¿El clic fue dentro del propio combo (entry / botón)?
+        try:
+            cx, cy = self.winfo_rootx(), self.winfo_rooty()
+            cw, ch = self.winfo_width(), self.winfo_height()
+            if cx <= event.x_root <= cx + cw and cy <= event.y_root <= cy + ch:
+                return
+        except Exception:
+            pass
+        self._close()
+
     def _close(self):
+        # Desregistrar binding de clic global
+        try:
+            if self._b_click:
+                self.winfo_toplevel().unbind("<Button-1>", self._b_click)
+        except Exception:
+            pass
+        self._b_click = None
+
         # Restaurar check_if_master_is_canvas del CTkScrollableFrame
         try:
             sf = getattr(self, "_patched_sf", None)
