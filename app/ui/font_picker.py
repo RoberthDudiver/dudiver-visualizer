@@ -1,28 +1,27 @@
-"""FontComboBox — combo estilo Office: campo editable + dropdown con cada fuente
-en su propia tipografía.
+"""FontComboBox — combo de fuentes hecho desde cero.
 
-Estructura:
-  ┌─────────────────────────┬───┐
-  │  Arial          (Arial) │ ▾ │   ← CTkEntry + botón flecha
-  └─────────────────────────┴───┘
-  ┌─────────────────────────────┐
-  │ Arial                       │  ← tk.Toplevel sin decoración (dropdown)
-  │ Impact                      │    tk.Text con tag por fuente
-  │ Comic Sans MS               │    Scrollbar + filtro live
-  │ ...                         │
-  └─────────────────────────────┘
+Estructura visual:
+  ┌──────────────────────────────┬───┐
+  │  NombreFuente  (en esa font) │ ▾ │
+  └──────────────────────────────┴───┘
+         ↓ (aparece pegado abajo)
+  ┌──────────────────────────────────┐
+  │  Arial            (Arial)        │  tk.Toplevel sin borde
+  │  Arial Black      (Arial Black)  │  tk.Text con tag-por-fuente
+  │  Impact           (Impact)       │  Scroll nativo
+  │  ...                             │
+  └──────────────────────────────────┘
 
-Comportamiento:
-  - Al scrollear fuera del dropdown, se cierra automáticamente (como Word/Excel).
-  - Al mover la ventana principal, se cierra.
+Cierre automático cuando:
+  · Se hace scroll en el panel padre (CTkScrollableFrame)
+  · Se mueve / redimensiona la ventana principal
+  · Se hace scroll fuera del popup con la rueda del mouse
+  · Se hace clic fuera del combo
+  · Se presiona Escape
 
-Uso:
-    combo = FontComboBox(parent, fuente_var, all_inputs)
-    combo.pack(fill="x")
-
-Preload (llamar una vez al iniciar la app):
+Preload:
     from app.ui.font_picker import preload_fonts
-    preload_fonts(root_window)
+    preload_fonts(root_window)        # llamar una vez al iniciar
 """
 
 import tkinter as tk
@@ -33,7 +32,7 @@ from app.config import ACCENT, INPUT_BG, DIM
 
 # ── Caché global ──────────────────────────────────────────────────────────────
 _ALL_FONTS: list[str] = []
-_VALID_FONTS: set[str] = set()   # fuentes que tkinter reconoce realmente
+_VALID_FONTS: set[str] = set()
 _PRELOAD_DONE = False
 
 
@@ -55,7 +54,7 @@ def _collect_fonts() -> list[str]:
 
 
 def preload_fonts(root: tk.Misc, batch: int = 60, delay_ms: int = 8) -> None:
-    """Pre-carga lista de fuentes sin bloquear la UI (lotes con after)."""
+    """Pre-carga fuentes sin bloquear la UI (lotes con after)."""
     global _ALL_FONTS, _PRELOAD_DONE
     if _PRELOAD_DONE:
         return
@@ -82,30 +81,60 @@ def preload_fonts(root: tk.Misc, batch: int = 60, delay_ms: int = 8) -> None:
     root.after(30, _step)
 
 
-# ── Widget principal ──────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _find_scroll_canvas(widget: tk.Misc):
+    """Sube la jerarquía buscando CTkScrollableFrame y devuelve su canvas."""
+    w = widget
+    while w is not None:
+        if hasattr(w, "_parent_canvas"):          # es CTkScrollableFrame
+            return w._parent_canvas
+        try:
+            w = w.master
+        except Exception:
+            break
+    return None
+
+
+def _cursor_over(toplevel: tk.Toplevel, x_root: int, y_root: int) -> bool:
+    """True si las coordenadas de pantalla están dentro del toplevel."""
+    try:
+        px = toplevel.winfo_rootx()
+        py = toplevel.winfo_rooty()
+        return (px <= x_root <= px + toplevel.winfo_width() and
+                py <= y_root <= py + toplevel.winfo_height())
+    except Exception:
+        return False
+
+
+# ── Widget ────────────────────────────────────────────────────────────────────
 
 class FontComboBox(ctk.CTkFrame):
-    """Combo estilo Office: entry editable + dropdown con fuentes en sí mismas."""
+    """Combo de fuentes construido desde cero sobre tk primitivo."""
 
-    _ITEM_H = 26        # altura de cada ítem en px
-    _MAX_VISIBLE = 12   # ítems visibles antes de hacer scroll
+    _ITEM_H     = 26
+    _MAX_VISIBLE = 12
 
+    # ── Init ──────────────────────────────────────────────────────────────────
     def __init__(self, parent, fuente_var: ctk.StringVar,
                  all_inputs: list, **kw):
         super().__init__(parent, fg_color="transparent", **kw)
-        self._var = fuente_var
-        self._dropdown: tk.Toplevel | None = None
-        self._text_widget: tk.Text | None = None
-        self._filtered: list[str] = []
-        self._built = False
-        self._hover_line: int | None = None
-        self._search_var = tk.StringVar(value=fuente_var.get())
 
-        # Bindings globales para cerrar (scroll / mover ventana)
-        self._bind_scroll_id: str | None = None
-        self._bind_conf_id: str | None = None
+        self._var         = fuente_var
+        self._search_var  = tk.StringVar(value=fuente_var.get())
+        self._filtered:   list[str] = []
 
-        # ── Entry + flecha ──────────────────────────────────────────────────
+        # estado del dropdown
+        self._popup:      tk.Toplevel | None = None
+        self._txt:        tk.Text      | None = None
+        self._tags_built  = False
+
+        # ids de bindings que hay que limpiar al cerrar
+        self._b_scroll:   str | None = None   # canvas del panel padre
+        self._b_wheel:    str | None = None   # rueda en root
+        self._b_conf:     str | None = None   # configure del root
+
+        # ── layout entry + botón ──────────────────────────────────────────
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=0)
 
@@ -117,232 +146,229 @@ class FontComboBox(ctk.CTkFrame):
         )
         self._entry.grid(row=0, column=0, sticky="ew")
 
-        self._arrow = ctk.CTkButton(
+        self._btn = ctk.CTkButton(
             self, text="▾", width=28, height=28,
             corner_radius=6, fg_color=INPUT_BG,
             hover_color="#2a2a4a", text_color=DIM,
             font=("Segoe UI", 11),
-            command=self._toggle_dropdown,
+            command=self._toggle,
         )
-        self._arrow.grid(row=0, column=1, padx=(2, 0))
+        self._btn.grid(row=0, column=1, padx=(2, 0))
 
         all_inputs.append(self._entry)
-        all_inputs.append(self._arrow)
+        all_inputs.append(self._btn)
 
-        # Bindings del entry
-        self._search_var.trace_add("write", self._on_search)
-        self._entry.bind("<FocusIn>",    lambda e: self._open_dropdown())
-        self._entry.bind("<Return>",     lambda e: self._commit_typed())
-        self._entry.bind("<Escape>",     lambda e: self._close_dropdown())
-        self._entry.bind("<Down>",       lambda e: self._move(1))
-        self._entry.bind("<Up>",         lambda e: self._move(-1))
+        # ── bindings del entry ────────────────────────────────────────────
+        self._search_var.trace_add("write", self._on_type)
+        self._entry.bind("<FocusIn>",  lambda e: self._open())
+        self._entry.bind("<Return>",   lambda e: self._commit())
+        self._entry.bind("<Escape>",   lambda e: self._close())
+        self._entry.bind("<Down>",     lambda e: self._move(+1))
+        self._entry.bind("<Up>",       lambda e: self._move(-1))
 
-        # Actualizar fuente del entry cuando cambia la variable
-        fuente_var.trace_add("write", lambda *_: self._sync_from_var())
+        # sincronizar cuando cambia la var externa
+        fuente_var.trace_add("write", lambda *_: self._sync())
 
-    # ── Sync ─────────────────────────────────────────────────────────────────
+    # ── Sync entry ────────────────────────────────────────────────────────────
 
-    def _sync_from_var(self):
-        """Cuando la var externa cambia, actualizar entry y su fuente."""
+    def _sync(self):
         name = self._var.get()
         self._search_var.set(name)
-        self._apply_entry_font(name)
+        self._set_entry_font(name)
 
-    def _apply_entry_font(self, name: str):
+    def _set_entry_font(self, name: str):
         try:
             self._entry.configure(font=(name, 11))
         except Exception:
             self._entry.configure(font=("Segoe UI", 11))
 
-    # ── Dropdown ─────────────────────────────────────────────────────────────
+    # ── Abrir / cerrar ────────────────────────────────────────────────────────
 
-    def _toggle_dropdown(self):
-        if self._dropdown and self._dropdown.winfo_exists():
-            self._close_dropdown()
+    def _toggle(self):
+        if self._popup and self._popup.winfo_exists():
+            self._close()
         else:
-            self._open_dropdown()
+            self._open()
 
-    def _open_dropdown(self):
+    def _open(self):
         global _ALL_FONTS
-        if self._dropdown and self._dropdown.winfo_exists():
+        if self._popup and self._popup.winfo_exists():
             return
+
         if not _ALL_FONTS:
             _ALL_FONTS = _collect_fonts()
 
-        # Crear ventana sin decoración
+        # ── construir popup ───────────────────────────────────────────────
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
         popup.configure(bg="#0f0f1e")
         popup.resizable(False, False)
         popup.attributes("-topmost", True)
+        self._popup = popup
 
-        # Marco con borde sutil
-        frame = tk.Frame(popup, bg="#2a2a4a", bd=1, relief="flat")
-        frame.pack(fill="both", expand=True, padx=1, pady=1)
+        border = tk.Frame(popup, bg="#2a2a4a", bd=1, relief="flat")
+        border.pack(fill="both", expand=True, padx=1, pady=1)
 
-        # Scrollbar
-        sb = tk.Scrollbar(frame, orient="vertical", bg="#1a1a2a",
-                          troughcolor="#0f0f1e", activebackground=ACCENT)
+        sb = tk.Scrollbar(border, orient="vertical",
+                          bg="#1a1a2a", troughcolor="#0f0f1e",
+                          activebackground=ACCENT)
         sb.pack(side="right", fill="y")
 
-        # Text widget — soporta per-line font via tags
-        txt = tk.Text(
-            frame,
-            yscrollcommand=sb.set,
-            bg="#0f0f1e", fg="white",
-            selectbackground=ACCENT,
-            insertbackground="white",
-            relief="flat", bd=0,
-            cursor="arrow",
-            wrap="none",
-            state="disabled",
-        )
+        txt = tk.Text(border,
+                      yscrollcommand=sb.set,
+                      bg="#0f0f1e", fg="white",
+                      selectbackground=ACCENT,
+                      relief="flat", bd=0,
+                      cursor="arrow", wrap="none",
+                      state="disabled")
         txt.pack(side="left", fill="both", expand=True)
         sb.config(command=txt.yview)
-        txt.bind("<MouseWheel>", lambda e: txt.yview_scroll(
-            int(-1 * e.delta / 120), "units"))
+        self._txt = txt
 
-        self._text_widget = txt
-        self._dropdown = popup
+        # scroll de la rueda dentro del popup
+        txt.bind("<MouseWheel>",
+                 lambda e: txt.yview_scroll(int(-e.delta / 120), "units"))
 
-        # Construir contenido (sólo la primera vez se crean los tags)
-        if not self._built:
-            self._build_tags()
-            self._built = True
+        # construir contenido la primera vez
+        if not self._tags_built:
+            self._build_all_tags()
+            self._tags_built = True
 
-        # Posicionar bajo el entry
-        self._position_dropdown()
+        self._place_popup()
         self._filter(self._search_var.get())
 
-        # ── Bindings para cerrar ──────────────────────────────────────────
-        # 1. Scroll fuera del dropdown → cerrar (como Word/Excel)
+        # ── registrar handlers de cierre ──────────────────────────────────
         root = self.winfo_toplevel()
-        self._bind_scroll_id = root.bind(
-            "<MouseWheel>", self._on_root_scroll, add="+"
-        )
-        # 2. Ventana movida o redimensionada → cerrar
-        self._bind_conf_id = root.bind(
-            "<Configure>", self._on_root_configure, add="+"
-        )
 
-        popup.bind("<Escape>", lambda e: self._close_dropdown())
+        # 1. canvas del CTkScrollableFrame padre → cerrar al scrollear el panel
+        sc = _find_scroll_canvas(self)
+        if sc:
+            self._b_scroll = sc.bind(
+                "<MouseWheel>", lambda e: self._close(), add="+")
+            self._scroll_canvas_ref = sc   # guardar ref para unbind
+        else:
+            self._scroll_canvas_ref = None
 
-    def _on_root_scroll(self, event):
-        """Si el scroll ocurre fuera del dropdown, cerrarlo."""
-        if not self._dropdown or not self._dropdown.winfo_exists():
-            return
-        # ¿Está el cursor sobre el propio popup?
-        px, py = self._dropdown.winfo_x(), self._dropdown.winfo_y()
-        pw, ph = self._dropdown.winfo_width(), self._dropdown.winfo_height()
-        if px <= event.x_root <= px + pw and py <= event.y_root <= py + ph:
-            return   # scroll dentro del dropdown → no cerrar
-        self._close_dropdown()
+        # 2. rueda del mouse en root → cerrar si NO está sobre el popup
+        self._b_wheel = root.bind(
+            "<MouseWheel>", self._on_root_wheel, add="+")
 
-    def _on_root_configure(self, event):
-        """Si la ventana principal se mueve, cerrar el dropdown."""
-        # Solo reaccionar a eventos del toplevel, no de sub-widgets
-        if event.widget is self.winfo_toplevel():
-            self._close_dropdown()
+        # 3. ventana principal movida / redimensionada → cerrar
+        self._b_conf = root.bind(
+            "<Configure>", self._on_root_conf, add="+")
 
-    def _position_dropdown(self):
-        if not self._dropdown:
+        popup.bind("<Escape>", lambda e: self._close())
+
+    def _place_popup(self):
+        """Posicionar el popup justo debajo del entry."""
+        if not self._popup:
             return
         self.update_idletasks()
-        x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.winfo_height()
-        w = self.winfo_width()
-        n = min(len(_ALL_FONTS), self._MAX_VISIBLE)
-        h = n * self._ITEM_H + 4
-        self._dropdown.geometry(f"{w}x{h}+{x}+{y}")
+        x  = self.winfo_rootx()
+        y  = self.winfo_rooty() + self.winfo_height()
+        w  = self.winfo_width()
+        n  = min(len(_ALL_FONTS), self._MAX_VISIBLE)
+        h  = n * self._ITEM_H + 4
+        self._popup.geometry(f"{w}x{h}+{x}+{y}")
 
-    def _build_tags(self):
-        """Configura un tag por cada fuente (operación rápida, una sola vez)."""
-        txt = self._text_widget
+    # ── Contenido del popup ───────────────────────────────────────────────────
+
+    def _build_all_tags(self):
+        """Crea un tag tk por fuente (una sola vez en la vida del widget)."""
+        txt = self._txt
         txt.configure(state="normal")
         txt.delete("1.0", "end")
-        for name in _ALL_FONTS:
-            tag = f"f_{id(name)}"
-            font_spec = (name, 13) if name in _VALID_FONTS else ("Segoe UI", 11)
-            txt.tag_configure(tag, font=font_spec,
-                              foreground="white",
-                              spacing1=3, spacing3=3)
-            txt.tag_configure(tag + "_h",
-                              font=font_spec,
+        for i, name in enumerate(_ALL_FONTS):
+            tag = f"f{i}"
+            fs  = (name, 13) if name in _VALID_FONTS else ("Segoe UI", 11)
+            txt.tag_configure(tag,
+                              font=fs, foreground="white",
+                              spacing1=4, spacing3=4)
+            txt.tag_configure(tag + "h",    # hover
+                              font=fs, foreground=ACCENT,
                               background="#1e1e3a",
-                              foreground=ACCENT,
-                              spacing1=3, spacing3=3)
-            txt.tag_configure(tag + "_sel",
-                              font=font_spec,
-                              background="#1e1e3a",
-                              foreground=ACCENT,
-                              spacing1=3, spacing3=3)
+                              spacing1=4, spacing3=4)
             txt.insert("end", f"  {name}\n", tag)
-
-            line_no = _ALL_FONTS.index(name) + 1
-            txt.tag_bind(tag, "<Button-1>",
-                         lambda e, fn=name: self._select(fn))
-            txt.tag_bind(tag, "<Enter>",
-                         lambda e, ln=line_no: self._set_hover(ln))
-            txt.tag_bind(tag, "<Leave>",
-                         lambda e, ln=line_no: self._clear_hover(ln))
-
+            line = i + 1
+            txt.tag_bind(tag,  "<Button-1>",
+                         lambda e, n=name: self._select(n))
+            txt.tag_bind(tag,  "<Enter>",
+                         lambda e, t=tag, l=line: self._hover_on(t, l))
+            txt.tag_bind(tag,  "<Leave>",
+                         lambda e, t=tag, l=line: self._hover_off(t, l))
         txt.configure(state="disabled")
 
-    # ── Filtrado ──────────────────────────────────────────────────────────────
-
-    def _on_search(self, *_):
-        query = self._search_var.get()
-        if self._dropdown and self._dropdown.winfo_exists():
-            self._filter(query)
-        else:
-            self._open_dropdown()
-
     def _filter(self, query: str):
-        if not self._text_widget:
+        """Muestra sólo las fuentes que coinciden con la búsqueda."""
+        if not self._txt:
             return
-        txt = self._text_widget
-        q = query.strip().lower()
-        fonts = [f for f in _ALL_FONTS if q in f.lower()] if q else list(_ALL_FONTS)
+        txt = self._txt
+        q   = query.strip().lower()
+        fonts = ([f for f in _ALL_FONTS if q in f.lower()]
+                 if q else list(_ALL_FONTS))
         self._filtered = fonts
 
         txt.configure(state="normal")
         txt.delete("1.0", "end")
-        for name in fonts:
-            tag = f"f_{id(name)}"
-            font_spec = (name, 13) if name in _VALID_FONTS else ("Segoe UI", 11)
-            txt.tag_configure(tag, font=font_spec,
-                              foreground="white", spacing1=3, spacing3=3)
+        for i, name in enumerate(fonts):
+            # reutilizar tag global (índice en _ALL_FONTS)
+            gi  = _ALL_FONTS.index(name) if name in _ALL_FONTS else i
+            tag = f"f{gi}"
+            fs  = (name, 13) if name in _VALID_FONTS else ("Segoe UI", 11)
+            txt.tag_configure(tag, font=fs, foreground="white",
+                              spacing1=4, spacing3=4)
             txt.tag_bind(tag, "<Button-1>",
-                         lambda e, fn=name: self._select(fn))
+                         lambda e, n=name: self._select(n))
             txt.insert("end", f"  {name}\n", tag)
         txt.configure(state="disabled")
 
-        # Scroll hasta la fuente actual
+        # scroll hasta la fuente actual
         cur = self._var.get()
         if cur in fonts:
-            idx = fonts.index(cur)
+            idx   = fonts.index(cur)
             total = max(len(fonts), 1)
-            txt.yview_moveto(max(0, (idx - 2) / total))
+            txt.yview_moveto(max(0.0, (idx - 2) / total))
 
-        # Ajustar altura del dropdown
-        if self._dropdown and self._dropdown.winfo_exists():
+        # ajustar tamaño del popup
+        if self._popup and self._popup.winfo_exists():
             n = min(len(fonts), self._MAX_VISIBLE)
             h = max(n * self._ITEM_H + 4, 40)
-            self._dropdown.geometry(
+            self._popup.geometry(
                 f"{self.winfo_width()}x{h}"
                 f"+{self.winfo_rootx()}"
                 f"+{self.winfo_rooty() + self.winfo_height()}")
 
+    # ── Hover ─────────────────────────────────────────────────────────────────
+
+    def _hover_on(self, tag: str, line: int):
+        if not self._txt:
+            return
+        try:
+            self._txt.configure(state="normal")
+            self._txt.tag_add(tag + "h", f"{line}.0", f"{line}.end")
+            self._txt.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _hover_off(self, tag: str, line: int):
+        if not self._txt:
+            return
+        try:
+            self._txt.configure(state="normal")
+            self._txt.tag_remove(tag + "h", f"{line}.0", f"{line}.end")
+            self._txt.configure(state="disabled")
+        except Exception:
+            pass
+
     # ── Selección ─────────────────────────────────────────────────────────────
 
-    def _select(self, font_name: str):
-        self._var.set(font_name)
-        self._search_var.set(font_name)
-        self._apply_entry_font(font_name)
-        self._close_dropdown()
+    def _select(self, name: str):
+        self._var.set(name)
+        self._search_var.set(name)
+        self._set_entry_font(name)
+        self._close()
 
-    def _commit_typed(self):
-        """Al presionar Enter, seleccionar la primera coincidencia filtrada."""
+    def _commit(self):
         if self._filtered:
             self._select(self._filtered[0])
         else:
@@ -351,7 +377,6 @@ class FontComboBox(ctk.CTkFrame):
                 self._select(typed)
 
     def _move(self, delta: int):
-        """Navegar con flechas arriba/abajo."""
         if not self._filtered:
             return
         cur = self._var.get()
@@ -362,62 +387,54 @@ class FontComboBox(ctk.CTkFrame):
         idx = max(0, min(len(self._filtered) - 1, idx + delta))
         self._select(self._filtered[idx])
 
-    # ── Hover ─────────────────────────────────────────────────────────────────
+    # ── Handlers de cierre ────────────────────────────────────────────────────
 
-    def _set_hover(self, line_no: int):
-        if not self._text_widget:
-            return
-        self._hover_line = line_no
+    def _on_type(self, *_):
+        q = self._search_var.get()
+        if self._popup and self._popup.winfo_exists():
+            self._filter(q)
+        else:
+            self._open()
+
+    def _on_root_wheel(self, event):
+        """Cierra si la rueda NO está sobre el popup."""
+        if (self._popup and self._popup.winfo_exists()
+                and _cursor_over(self._popup, event.x_root, event.y_root)):
+            return          # scroll dentro del popup → no cerrar
+        self._close()
+
+    def _on_root_conf(self, event):
+        """Cierra cuando la ventana principal se mueve o cambia de tamaño."""
+        if event.widget is self.winfo_toplevel():
+            self._close()
+
+    # ── Cerrar y limpiar bindings ─────────────────────────────────────────────
+
+    def _close(self):
+        root = self.winfo_toplevel()
+
+        # desregistrar binding en canvas del panel
         try:
-            self._text_widget.configure(state="normal")
-            self._text_widget.tag_add(
-                "hover_hi", f"{line_no}.0", f"{line_no}.end")
-            self._text_widget.tag_configure(
-                "hover_hi", background="#1e1e3a", foreground=ACCENT)
-            self._text_widget.configure(state="disabled")
+            sc = getattr(self, "_scroll_canvas_ref", None)
+            if sc and self._b_scroll:
+                sc.unbind("<MouseWheel>", self._b_scroll)
         except Exception:
             pass
 
-    def _clear_hover(self, line_no: int):
-        if not self._text_widget:
-            return
+        # desregistrar bindings en root
         try:
-            self._text_widget.configure(state="normal")
-            self._text_widget.tag_remove("hover_hi", f"{line_no}.0", f"{line_no}.end")
-            self._text_widget.configure(state="disabled")
+            if self._b_wheel:
+                root.unbind("<MouseWheel>", self._b_wheel)
+            if self._b_conf:
+                root.unbind("<Configure>", self._b_conf)
         except Exception:
             pass
 
-    # ── Cerrar ────────────────────────────────────────────────────────────────
+        self._b_scroll = self._b_wheel = self._b_conf = None
+        self._scroll_canvas_ref = None
 
-    def _close_dropdown(self):
-        # Desregistrar bindings globales
-        try:
-            root = self.winfo_toplevel()
-            if self._bind_scroll_id:
-                root.unbind("<MouseWheel>", self._bind_scroll_id)
-            if self._bind_conf_id:
-                root.unbind("<Configure>", self._bind_conf_id)
-        except Exception:
-            pass
-        self._bind_scroll_id = None
-        self._bind_conf_id = None
-
-        if self._dropdown and self._dropdown.winfo_exists():
-            self._dropdown.destroy()
-        self._dropdown = None
-        self._text_widget = None
-        self._built = False
-
-    def _check_focus(self):
-        """Cerrar si el foco ya no está en el combo ni en el dropdown."""
-        try:
-            focused = self.focus_get()
-            if focused and (
-                str(focused).startswith(str(self)) or
-                (self._dropdown and str(focused).startswith(str(self._dropdown)))
-            ):
-                return
-        except Exception:
-            pass
-        self._close_dropdown()
+        if self._popup and self._popup.winfo_exists():
+            self._popup.destroy()
+        self._popup = None
+        self._txt   = None
+        self._tags_built = False   # reconstruir en próxima apertura
