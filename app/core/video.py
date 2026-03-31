@@ -383,11 +383,19 @@ class VideoGenerator:
             whisper_ts = None  # ruta a archivo externo (puede ser None si no existe)
             whisper_raw = cfg.get("whisper_raw")
 
-            # Extraer líneas reales del usuario para forzar sobre Whisper
+            # Líneas reales del usuario (siempre disponibles en cfg["lines"])
+            # No usar cfg["timing"] porque puede ser None si aún no hay timestamps.
+            raw_lines = cfg.get("lines") or []
             lineas_reales = [
-                item["texto"] for item in (cfg.get("timing") or [])
-                if isinstance(item, dict) and item.get("texto", "").strip()
+                l.strip() for l in raw_lines
+                if isinstance(l, str) and l.strip()
             ]
+            if not lineas_reales:
+                # Fallback: extraer de timing si lines no está disponible
+                lineas_reales = [
+                    item["texto"] for item in (cfg.get("timing") or [])
+                    if isinstance(item, dict) and item.get("texto", "").strip()
+                ]
 
             if whisper_raw and isinstance(whisper_raw, dict) and whisper_raw.get("palabras"):
                 # Forzar letra real sobre timestamps de Whisper
