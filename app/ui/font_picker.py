@@ -1,27 +1,16 @@
-"""FontComboBox — combo de fuentes hecho desde cero.
+"""FontComboBox — combo de fuentes con preview tipográfico.
 
-Estructura visual:
-  ┌──────────────────────────────┬───┐
-  │  NombreFuente  (en esa font) │ ▾ │
-  └──────────────────────────────┴───┘
-         ↓ (aparece pegado abajo)
-  ┌──────────────────────────────────┐
-  │  Arial            (Arial)        │  tk.Toplevel sin borde
-  │  Arial Black      (Arial Black)  │  tk.Text con tag-por-fuente
-  │  Impact           (Impact)       │  Scroll nativo
-  │  ...                             │
-  └──────────────────────────────────┘
+Comportamiento:
+  · Cada fuente se muestra en su propia tipografía en el dropdown.
+  · El dropdown se cierra/reposiciona automáticamente si el entry se mueve
+    (panel scrollea, ventana se mueve) — sin depender de eventos de scroll.
+  · Filtro live mientras escribís.
+  · Navegación con ↑↓ y Enter.
+  · Cierra con Escape o clic fuera.
 
-Cierre automático cuando:
-  · Se hace scroll en el panel padre (CTkScrollableFrame)
-  · Se mueve / redimensiona la ventana principal
-  · Se hace scroll fuera del popup con la rueda del mouse
-  · Se hace clic fuera del combo
-  · Se presiona Escape
-
-Preload:
+Preload (una vez al iniciar):
     from app.ui.font_picker import preload_fonts
-    preload_fonts(root_window)        # llamar una vez al iniciar
+    preload_fonts(root_window)
 """
 
 import tkinter as tk
@@ -81,60 +70,29 @@ def preload_fonts(root: tk.Misc, batch: int = 60, delay_ms: int = 8) -> None:
     root.after(30, _step)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _find_scroll_canvas(widget: tk.Misc):
-    """Sube la jerarquía buscando CTkScrollableFrame y devuelve su canvas."""
-    w = widget
-    while w is not None:
-        if hasattr(w, "_parent_canvas"):          # es CTkScrollableFrame
-            return w._parent_canvas
-        try:
-            w = w.master
-        except Exception:
-            break
-    return None
-
-
-def _cursor_over(toplevel: tk.Toplevel, x_root: int, y_root: int) -> bool:
-    """True si las coordenadas de pantalla están dentro del toplevel."""
-    try:
-        px = toplevel.winfo_rootx()
-        py = toplevel.winfo_rooty()
-        return (px <= x_root <= px + toplevel.winfo_width() and
-                py <= y_root <= py + toplevel.winfo_height())
-    except Exception:
-        return False
-
-
 # ── Widget ────────────────────────────────────────────────────────────────────
 
 class FontComboBox(ctk.CTkFrame):
-    """Combo de fuentes construido desde cero sobre tk primitivo."""
+    """Combo de fuentes con preview: entry editable + dropdown tipográfico."""
 
-    _ITEM_H     = 26
+    _ITEM_H      = 26
     _MAX_VISIBLE = 12
+    _POLL_MS     = 40       # ms entre chequeos de posición
 
-    # ── Init ──────────────────────────────────────────────────────────────────
     def __init__(self, parent, fuente_var: ctk.StringVar,
                  all_inputs: list, **kw):
         super().__init__(parent, fg_color="transparent", **kw)
 
-        self._var         = fuente_var
-        self._search_var  = tk.StringVar(value=fuente_var.get())
-        self._filtered:   list[str] = []
+        self._var        = fuente_var
+        self._search_var = tk.StringVar(value=fuente_var.get())
+        self._filtered:  list[str] = []
 
-        # estado del dropdown
-        self._popup:      tk.Toplevel | None = None
-        self._txt:        tk.Text      | None = None
-        self._tags_built  = False
+        self._popup:     tk.Toplevel | None = None
+        self._txt:       tk.Text     | None = None
+        self._tags_built = False
+        self._last_pos   = (0, 0)   # (x, y) del entry en pantalla
 
-        # ids de bindings que hay que limpiar al cerrar
-        self._b_scroll:   str | None = None   # canvas del panel padre
-        self._b_wheel:    str | None = None   # rueda en root
-        self._b_conf:     str | None = None   # configure del root
-
-        # ── layout entry + botón ──────────────────────────────────────────
+        # ── Entry + botón ─────────────────────────────────────────────────
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=0)
 
@@ -158,7 +116,7 @@ class FontComboBox(ctk.CTkFrame):
         all_inputs.append(self._entry)
         all_inputs.append(self._btn)
 
-        # ── bindings del entry ────────────────────────────────────────────
+        # ── Bindings entry ────────────────────────────────────────────────
         self._search_var.trace_add("write", self._on_type)
         self._entry.bind("<FocusIn>",  lambda e: self._open())
         self._entry.bind("<Return>",   lambda e: self._commit())
@@ -166,10 +124,9 @@ class FontComboBox(ctk.CTkFrame):
         self._entry.bind("<Down>",     lambda e: self._move(+1))
         self._entry.bind("<Up>",       lambda e: self._move(-1))
 
-        # sincronizar cuando cambia la var externa
         fuente_var.trace_add("write", lambda *_: self._sync())
 
-    # ── Sync entry ────────────────────────────────────────────────────────────
+    # ── Sync ──────────────────────────────────────────────────────────────────
 
     def _sync(self):
         name = self._var.get()
@@ -182,7 +139,7 @@ class FontComboBox(ctk.CTkFrame):
         except Exception:
             self._entry.configure(font=("Segoe UI", 11))
 
-    # ── Abrir / cerrar ────────────────────────────────────────────────────────
+    # ── Apertura / cierre ─────────────────────────────────────────────────────
 
     def _toggle(self):
         if self._popup and self._popup.winfo_exists():
@@ -194,11 +151,9 @@ class FontComboBox(ctk.CTkFrame):
         global _ALL_FONTS
         if self._popup and self._popup.winfo_exists():
             return
-
         if not _ALL_FONTS:
             _ALL_FONTS = _collect_fonts()
 
-        # ── construir popup ───────────────────────────────────────────────
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
         popup.configure(bg="#0f0f1e")
@@ -225,11 +180,9 @@ class FontComboBox(ctk.CTkFrame):
         sb.config(command=txt.yview)
         self._txt = txt
 
-        # scroll de la rueda dentro del popup
         txt.bind("<MouseWheel>",
                  lambda e: txt.yview_scroll(int(-e.delta / 120), "units"))
 
-        # construir contenido la primera vez
         if not self._tags_built:
             self._build_all_tags()
             self._tags_built = True
@@ -237,44 +190,48 @@ class FontComboBox(ctk.CTkFrame):
         self._place_popup()
         self._filter(self._search_var.get())
 
-        # ── registrar handlers de cierre ──────────────────────────────────
-        root = self.winfo_toplevel()
+        # clic fuera → cerrar
+        popup.bind("<FocusOut>", lambda e: self.after(80, self._check_focus))
+        popup.bind("<Escape>",   lambda e: self._close())
 
-        # 1. canvas del CTkScrollableFrame padre → cerrar al scrollear el panel
-        sc = _find_scroll_canvas(self)
-        if sc:
-            self._b_scroll = sc.bind(
-                "<MouseWheel>", lambda e: self._close(), add="+")
-            self._scroll_canvas_ref = sc   # guardar ref para unbind
-        else:
-            self._scroll_canvas_ref = None
-
-        # 2. rueda del mouse en root → cerrar si NO está sobre el popup
-        self._b_wheel = root.bind(
-            "<MouseWheel>", self._on_root_wheel, add="+")
-
-        # 3. ventana principal movida / redimensionada → cerrar
-        self._b_conf = root.bind(
-            "<Configure>", self._on_root_conf, add="+")
-
-        popup.bind("<Escape>", lambda e: self._close())
+        # guardar posición actual del entry y arrancar polling
+        self.update_idletasks()
+        self._last_pos = (self.winfo_rootx(), self.winfo_rooty())
+        self._poll_position()
 
     def _place_popup(self):
-        """Posicionar el popup justo debajo del entry."""
+        """Posicionar popup justo debajo del entry."""
         if not self._popup:
             return
         self.update_idletasks()
-        x  = self.winfo_rootx()
-        y  = self.winfo_rooty() + self.winfo_height()
-        w  = self.winfo_width()
-        n  = min(len(_ALL_FONTS), self._MAX_VISIBLE)
-        h  = n * self._ITEM_H + 4
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        w = self.winfo_width()
+        n = min(len(_ALL_FONTS), self._MAX_VISIBLE)
+        h = n * self._ITEM_H + 4
         self._popup.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _poll_position(self):
+        """Cada _POLL_MS ms: si el entry se movió, cerrar el popup."""
+        if not self._popup or not self._popup.winfo_exists():
+            return
+        try:
+            cur = (self.winfo_rootx(), self.winfo_rooty())
+        except Exception:
+            self._close()
+            return
+
+        if cur != self._last_pos:
+            # El entry se movió (scroll del panel, ventana movida, etc.)
+            self._close()
+            return
+
+        # Seguir vigilando
+        self.after(self._POLL_MS, self._poll_position)
 
     # ── Contenido del popup ───────────────────────────────────────────────────
 
     def _build_all_tags(self):
-        """Crea un tag tk por fuente (una sola vez en la vida del widget)."""
         txt = self._txt
         txt.configure(state="normal")
         txt.delete("1.0", "end")
@@ -284,22 +241,21 @@ class FontComboBox(ctk.CTkFrame):
             txt.tag_configure(tag,
                               font=fs, foreground="white",
                               spacing1=4, spacing3=4)
-            txt.tag_configure(tag + "h",    # hover
+            txt.tag_configure(tag + "h",
                               font=fs, foreground=ACCENT,
                               background="#1e1e3a",
                               spacing1=4, spacing3=4)
             txt.insert("end", f"  {name}\n", tag)
             line = i + 1
-            txt.tag_bind(tag,  "<Button-1>",
+            txt.tag_bind(tag, "<Button-1>",
                          lambda e, n=name: self._select(n))
-            txt.tag_bind(tag,  "<Enter>",
+            txt.tag_bind(tag, "<Enter>",
                          lambda e, t=tag, l=line: self._hover_on(t, l))
-            txt.tag_bind(tag,  "<Leave>",
+            txt.tag_bind(tag, "<Leave>",
                          lambda e, t=tag, l=line: self._hover_off(t, l))
         txt.configure(state="disabled")
 
     def _filter(self, query: str):
-        """Muestra sólo las fuentes que coinciden con la búsqueda."""
         if not self._txt:
             return
         txt = self._txt
@@ -310,9 +266,8 @@ class FontComboBox(ctk.CTkFrame):
 
         txt.configure(state="normal")
         txt.delete("1.0", "end")
-        for i, name in enumerate(fonts):
-            # reutilizar tag global (índice en _ALL_FONTS)
-            gi  = _ALL_FONTS.index(name) if name in _ALL_FONTS else i
+        for name in fonts:
+            gi  = _ALL_FONTS.index(name) if name in _ALL_FONTS else 0
             tag = f"f{gi}"
             fs  = (name, 13) if name in _VALID_FONTS else ("Segoe UI", 11)
             txt.tag_configure(tag, font=fs, foreground="white",
@@ -322,14 +277,12 @@ class FontComboBox(ctk.CTkFrame):
             txt.insert("end", f"  {name}\n", tag)
         txt.configure(state="disabled")
 
-        # scroll hasta la fuente actual
         cur = self._var.get()
         if cur in fonts:
             idx   = fonts.index(cur)
             total = max(len(fonts), 1)
             txt.yview_moveto(max(0.0, (idx - 2) / total))
 
-        # ajustar tamaño del popup
         if self._popup and self._popup.winfo_exists():
             n = min(len(fonts), self._MAX_VISIBLE)
             h = max(n * self._ITEM_H + 4, 40)
@@ -360,7 +313,7 @@ class FontComboBox(ctk.CTkFrame):
         except Exception:
             pass
 
-    # ── Selección ─────────────────────────────────────────────────────────────
+    # ── Selección / navegación ────────────────────────────────────────────────
 
     def _select(self, name: str):
         self._var.set(name)
@@ -387,8 +340,6 @@ class FontComboBox(ctk.CTkFrame):
         idx = max(0, min(len(self._filtered) - 1, idx + delta))
         self._select(self._filtered[idx])
 
-    # ── Handlers de cierre ────────────────────────────────────────────────────
-
     def _on_type(self, *_):
         q = self._search_var.get()
         if self._popup and self._popup.winfo_exists():
@@ -396,45 +347,23 @@ class FontComboBox(ctk.CTkFrame):
         else:
             self._open()
 
-    def _on_root_wheel(self, event):
-        """Cierra si la rueda NO está sobre el popup."""
-        if (self._popup and self._popup.winfo_exists()
-                and _cursor_over(self._popup, event.x_root, event.y_root)):
-            return          # scroll dentro del popup → no cerrar
-        self._close()
-
-    def _on_root_conf(self, event):
-        """Cierra cuando la ventana principal se mueve o cambia de tamaño."""
-        if event.widget is self.winfo_toplevel():
-            self._close()
-
-    # ── Cerrar y limpiar bindings ─────────────────────────────────────────────
+    # ── Cerrar ────────────────────────────────────────────────────────────────
 
     def _close(self):
-        root = self.winfo_toplevel()
-
-        # desregistrar binding en canvas del panel
-        try:
-            sc = getattr(self, "_scroll_canvas_ref", None)
-            if sc and self._b_scroll:
-                sc.unbind("<MouseWheel>", self._b_scroll)
-        except Exception:
-            pass
-
-        # desregistrar bindings en root
-        try:
-            if self._b_wheel:
-                root.unbind("<MouseWheel>", self._b_wheel)
-            if self._b_conf:
-                root.unbind("<Configure>", self._b_conf)
-        except Exception:
-            pass
-
-        self._b_scroll = self._b_wheel = self._b_conf = None
-        self._scroll_canvas_ref = None
-
         if self._popup and self._popup.winfo_exists():
             self._popup.destroy()
-        self._popup = None
-        self._txt   = None
-        self._tags_built = False   # reconstruir en próxima apertura
+        self._popup      = None
+        self._txt        = None
+        self._tags_built = False
+
+    def _check_focus(self):
+        try:
+            focused = self.focus_get()
+            if focused and (
+                str(focused).startswith(str(self)) or
+                (self._popup and str(focused).startswith(str(self._popup)))
+            ):
+                return
+        except Exception:
+            pass
+        self._close()
