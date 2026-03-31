@@ -91,6 +91,7 @@ class FontComboBox(ctk.CTkFrame):
         self._txt:       tk.Text     | None = None
         self._tags_built = False
         self._last_pos   = (0, 0)   # (x, y) del entry en pantalla
+        self._selecting  = False     # flag: no reabrir cuando _select cambia la var
 
         # ── Entry + botón ─────────────────────────────────────────────────
         self.columnconfigure(0, weight=1)
@@ -188,7 +189,9 @@ class FontComboBox(ctk.CTkFrame):
             self._tags_built = True
 
         self._place_popup()
-        self._filter(self._search_var.get())
+        # Al abrir siempre mostrar TODAS las fuentes y scrollear a la actual.
+        # Si el usuario escribe, _on_type filtra en vivo.
+        self._filter("")
 
         # clic fuera → cerrar
         popup.bind("<FocusOut>", lambda e: self.after(80, self._check_focus))
@@ -316,8 +319,10 @@ class FontComboBox(ctk.CTkFrame):
     # ── Selección / navegación ────────────────────────────────────────────────
 
     def _select(self, name: str):
+        self._selecting = True
         self._var.set(name)
         self._search_var.set(name)
+        self._selecting = False
         self._set_entry_font(name)
         self._close()
 
@@ -341,6 +346,8 @@ class FontComboBox(ctk.CTkFrame):
         self._select(self._filtered[idx])
 
     def _on_type(self, *_):
+        if self._selecting:
+            return                          # ignorar cambios provocados por _select
         q = self._search_var.get()
         if self._popup and self._popup.winfo_exists():
             self._filter(q)
