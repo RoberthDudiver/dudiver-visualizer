@@ -850,15 +850,23 @@ class KineticPILRenderer:
         if not lineas:
             return frame
 
-        # Buscar línea activa
+        # Buscar línea activa; si estamos entre líneas mostrar la última/próxima
         activa = None
+        ultima = None
+        proxima = None
         for linea in lineas:
             ini = linea.get("inicio", 0)
             fin = linea.get("fin", 0)
             if ini <= t <= fin:
                 activa = linea
                 break
+            if fin < t:
+                ultima = linea
+            elif ini > t and proxima is None:
+                proxima = linea
 
+        if not activa:
+            activa = ultima or proxima
         if not activa:
             return frame
 
