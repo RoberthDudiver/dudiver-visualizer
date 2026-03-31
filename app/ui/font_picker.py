@@ -155,11 +155,11 @@ class FontComboBox(ctk.CTkFrame):
             self._open_dropdown()
 
     def _open_dropdown(self):
+        global _ALL_FONTS
         if self._dropdown and self._dropdown.winfo_exists():
             return
         if not _ALL_FONTS:
             # Fuentes aún no cargadas — cargar ahora de forma síncrona
-            global _ALL_FONTS
             _ALL_FONTS = _collect_fonts()
 
         # Crear ventana sin decoración
