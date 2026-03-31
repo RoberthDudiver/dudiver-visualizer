@@ -400,6 +400,20 @@ class VideoGenerator:
                     self.on_log(f"  Letra forzada: {len(palabras_forzadas)} palabras reales")
                 raw_forzado = dict(whisper_raw)
                 raw_forzado["palabras"] = palabras_forzadas
+                # También reemplazar segmentos con texto real del usuario
+                # (One Line usa segmentos, no palabras individuales)
+                if lineas_reales:
+                    timing_items = cfg.get("timing") or []
+                    segmentos_reales = [
+                        {"texto": item["texto"],
+                         "inicio": item["inicio"],
+                         "fin": item["fin"]}
+                        for item in timing_items
+                        if isinstance(item, dict) and item.get("texto", "").strip()
+                    ]
+                    if segmentos_reales:
+                        raw_forzado["segmentos"] = segmentos_reales
+                        self.on_log(f"  Segmentos forzados: {len(segmentos_reales)} líneas reales")
                 # Escribir a temp para el renderer
                 ts_path = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
                 with open(ts_path, "w", encoding="utf-8") as f:
@@ -418,6 +432,18 @@ class VideoGenerator:
                             data["palabras"] = forzar_letra_sobre_timestamps(
                                 lineas_reales, data["palabras"]
                             )
+                        # También reemplazar segmentos con texto real
+                        if lineas_reales:
+                            timing_items = cfg.get("timing") or []
+                            segmentos_reales = [
+                                {"texto": item["texto"],
+                                 "inicio": item["inicio"],
+                                 "fin": item["fin"]}
+                                for item in timing_items
+                                if isinstance(item, dict) and item.get("texto", "").strip()
+                            ]
+                            if segmentos_reales:
+                                data["segmentos"] = segmentos_reales
                         ts_forced = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
                         with open(ts_forced, "w", encoding="utf-8") as f:
                             json.dump(data, f, ensure_ascii=False)

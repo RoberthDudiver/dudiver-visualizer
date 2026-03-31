@@ -198,11 +198,11 @@ class FontComboBox(ctk.CTkFrame):
 
         popup.bind("<Escape>", lambda e: self._close())
 
-        # clic en cualquier lugar fuera del popup → cerrar
-        root = self.winfo_toplevel()
-        self._b_click = root.bind(
-            "<Button-1>", self._on_global_click, add="+"
-        )
+        # grab_set: captura TODOS los eventos del mouse mientras el popup esté abierto.
+        # Cualquier clic fuera del popup → _on_popup_click detecta coordenadas y cierra.
+        popup.grab_set()
+        popup.bind("<Button-1>", self._on_popup_click)
+        popup.bind("<ButtonRelease-1>", self._on_popup_click)
 
         # guardar posición actual del entry y arrancar polling
         self.update_idletasks()
@@ -388,30 +388,20 @@ class FontComboBox(ctk.CTkFrame):
 
     # ── Cerrar ────────────────────────────────────────────────────────────────
 
-    def _on_global_click(self, event):
-        """Clic en cualquier widget: cerrar si es fuera del popup y del combo."""
+    def _on_popup_click(self, event):
+        """Con grab_set, todos los clics llegan aquí. Cerrar si es fuera del popup."""
         if not self._popup or not self._popup.winfo_exists():
             return
-        # ¿El clic fue dentro del popup?
-        if _cursor_over(self._popup, event.x_root, event.y_root):
-            return
-        # ¿El clic fue dentro del propio combo (entry / botón)?
-        try:
-            cx, cy = self.winfo_rootx(), self.winfo_rooty()
-            cw, ch = self.winfo_width(), self.winfo_height()
-            if cx <= event.x_root <= cx + cw and cy <= event.y_root <= cy + ch:
-                return
-        except Exception:
-            pass
-        self._close()
+        # Coordenadas relativas al popup
+        px = self._popup.winfo_rootx()
+        py = self._popup.winfo_rooty()
+        pw = self._popup.winfo_width()
+        ph = self._popup.winfo_height()
+        # Si el clic fue fuera → cerrar
+        if not (px <= event.x_root <= px + pw and py <= event.y_root <= py + ph):
+            self._close()
 
     def _close(self):
-        # Desregistrar binding de clic global
-        try:
-            if self._b_click:
-                self.winfo_toplevel().unbind("<Button-1>", self._b_click)
-        except Exception:
-            pass
         self._b_click = None
 
         # Restaurar check_if_master_is_canvas del CTkScrollableFrame
