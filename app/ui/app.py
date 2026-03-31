@@ -769,14 +769,18 @@ class VisualizerApp(ctk.CTk):
         if not palabras_raw:
             return None
 
-        # Forzar letra real sobre los timestamps de Whisper
+        # Forzar letra real sobre los timestamps de Whisper — SIEMPRE
+        # usa el texto que el usuario escribió, nunca lo que Whisper "creyó oír"
         lines = self._lyrics()
         if lines:
             try:
                 from app.config import forzar_letra_sobre_timestamps
-                return forzar_letra_sobre_timestamps(lines, palabras_raw)
-            except Exception:
-                pass
+                resultado = forzar_letra_sobre_timestamps(lines, palabras_raw)
+                if resultado:
+                    return resultado
+            except Exception as e:
+                import traceback
+                self._log(f"⚠ forzar_letra error: {e}\n{traceback.format_exc()[:300]}")
 
         return palabras_raw
 
