@@ -278,6 +278,7 @@ class VisualizerApp(ctk.CTk):
         self._save_pending = None
         self._dudi_path = None  # Ruta al .dudi activo
         self._loading_project = False
+        self._new_project_mode = False  # True tras "Nuevo": ignora auto-load de .dudi
         self.duracion_var.trace_add("write", self._on_duration_change)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
@@ -462,9 +463,14 @@ class VisualizerApp(ctk.CTk):
         if p and os.path.isfile(p):
             self.preview_panel.info_label.configure(text=f"\U0001f3b5 {short_path(p, 50)}")
             # Auto-cargar proyecto .dudi si existe en la carpeta del audio
+            # (se omite si venimos de "Nuevo proyecto" para no restaurar el anterior)
             folder = os.path.dirname(p)
             dudi = find_dudi(folder)
-            if dudi:
+            new_project_mode = getattr(self, '_new_project_mode', False)
+            if new_project_mode:
+                # Consumir el flag — ya no bloquear en carga siguiente
+                self._new_project_mode = False
+            if dudi and not new_project_mode:
                 try:
                     config = load_dudi(dudi)
                     self._dudi_path = dudi
@@ -1570,6 +1576,9 @@ class VisualizerApp(ctk.CTk):
 
         finally:
             self._loading_project = False
+
+        # Marcar que el próximo audio cargado NO debe restaurar el .dudi anterior
+        self._new_project_mode = True
 
         self._set_status("Listo — proyecto nuevo", 0)
         self.toolbar.set_status("Listo — proyecto nuevo")
