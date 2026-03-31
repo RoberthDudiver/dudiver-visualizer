@@ -709,22 +709,45 @@ class VisualizerApp(ctk.CTk):
         self._show_preview_image(img, ancho, alto)
 
     def _load_palabras_whisper(self):
-        """Carga palabras individuales del JSON de Whisper si existe."""
-        audio = self.audio_path.get()
-        if not audio:
+        """Carga palabras individuales del JSON de Whisper.
+
+        Aplica forzado de letra real sobre los timestamps de Whisper:
+        el TEXTO siempre viene del usuario, el TIMING de Whisper.
+        """
+        # Intentar desde whisper_raw en memoria primero
+        raw = getattr(self, '_whisper_raw', None)
+        palabras_raw = None
+        if raw and isinstance(raw, dict) and raw.get("palabras"):
+            palabras_raw = raw["palabras"]
+        else:
+            audio = self.audio_path.get()
+            if not audio:
+                return None
+            ts_file = os.path.splitext(audio)[0] + "_timestamps.json"
+            if not os.path.isfile(ts_file):
+                return None
+            try:
+                import json as _json
+                with open(ts_file, "r", encoding="utf-8") as f:
+                    data = _json.load(f)
+                if isinstance(data, dict) and "palabras" in data and data["palabras"]:
+                    palabras_raw = data["palabras"]
+            except Exception:
+                pass
+
+        if not palabras_raw:
             return None
-        ts_file = os.path.splitext(audio)[0] + "_timestamps.json"
-        if not os.path.isfile(ts_file):
-            return None
-        try:
-            import json as _json
-            with open(ts_file, "r", encoding="utf-8") as f:
-                data = _json.load(f)
-            if isinstance(data, dict) and "palabras" in data and data["palabras"]:
-                return data["palabras"]
-        except Exception:
-            pass
-        return None
+
+        # Forzar letra real sobre los timestamps de Whisper
+        lines = self._lyrics()
+        if lines:
+            try:
+                from app.config import forzar_letra_sobre_timestamps
+                return forzar_letra_sobre_timestamps(lines, palabras_raw)
+            except Exception:
+                pass
+
+        return palabras_raw
 
     def _preview_kinetic(self, ancho, alto, lines, t, titulo):
         """Genera preview de Kinetic Typography con estilo multi-línea."""

@@ -381,12 +381,28 @@ class VideoGenerator:
             whisper_ts = None  # ruta a archivo externo (puede ser None si no existe)
             whisper_raw = cfg.get("whisper_raw")
 
+            # Extraer líneas reales del usuario para forzar sobre Whisper
+            lineas_reales = [
+                item["texto"] for item in (cfg.get("timing") or [])
+                if isinstance(item, dict) and item.get("texto", "").strip()
+            ]
+
             if whisper_raw and isinstance(whisper_raw, dict) and whisper_raw.get("palabras"):
-                # Whisper raw embebido en el proyecto — escribir a temp para el renderer
+                # Forzar letra real sobre timestamps de Whisper
+                palabras_forzadas = whisper_raw["palabras"]
+                if lineas_reales:
+                    from app.config import forzar_letra_sobre_timestamps
+                    palabras_forzadas = forzar_letra_sobre_timestamps(
+                        lineas_reales, whisper_raw["palabras"]
+                    )
+                    self.on_log(f"  Letra forzada: {len(palabras_forzadas)} palabras reales")
+                raw_forzado = dict(whisper_raw)
+                raw_forzado["palabras"] = palabras_forzadas
+                # Escribir a temp para el renderer
                 ts_path = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
                 with open(ts_path, "w", encoding="utf-8") as f:
-                    json.dump(whisper_raw, f, ensure_ascii=False)
-                self.on_log(f"  {len(whisper_raw['palabras'])} palabras (del proyecto)")
+                    json.dump(raw_forzado, f, ensure_ascii=False)
+                self.on_log(f"  {len(palabras_forzadas)} palabras (letra del usuario)")
             else:
                 # Fallback: archivo externo
                 whisper_ts = os.path.splitext(audio_path)[0] + "_timestamps.json"
@@ -394,8 +410,17 @@ class VideoGenerator:
                     with open(whisper_ts, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     if isinstance(data, dict) and "palabras" in data and data["palabras"]:
-                        ts_path = whisper_ts
-                        self.on_log(f"  {len(data['palabras'])} palabras (archivo externo)")
+                        # Forzar letra real sobre los timestamps del archivo externo
+                        if lineas_reales:
+                            from app.config import forzar_letra_sobre_timestamps
+                            data["palabras"] = forzar_letra_sobre_timestamps(
+                                lineas_reales, data["palabras"]
+                            )
+                        ts_forced = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")
+                        with open(ts_forced, "w", encoding="utf-8") as f:
+                            json.dump(data, f, ensure_ascii=False)
+                        ts_path = ts_forced
+                        self.on_log(f"  {len(data['palabras'])} palabras (letra forzada)")
 
             if not ts_path:
                 ts_path = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")

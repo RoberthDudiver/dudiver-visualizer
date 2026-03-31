@@ -97,6 +97,70 @@ def alinear_letra_con_whisper(lineas_reales, palabras_whisper):
     return lineas_con_tiempo
 
 
+def forzar_letra_sobre_timestamps(lineas_reales, palabras_whisper):
+    """Fuerza la letra real del usuario sobre los timestamps de Whisper.
+
+    Toma el TIMING de Whisper pero el TEXTO de la letra.
+    Así 'cumbia pa la villa' nunca se muestra como 'cumbia pa la visa'.
+
+    Retorna: lista de dicts {"palabra": texto_real, "inicio": t, "fin": t}
+    """
+    if not lineas_reales or not palabras_whisper:
+        return palabras_whisper or []
+
+    # 1. Obtener ventanas de tiempo por línea (usa texto real para texto)
+    lineas_timing = alinear_letra_con_whisper(lineas_reales, palabras_whisper)
+
+    resultado = []
+    for linea_info in lineas_timing:
+        linea_texto = linea_info["texto"]          # ← texto real del usuario
+        t_inicio = linea_info["inicio"]
+        t_fin = linea_info["fin"]
+        palabras_usuario = linea_texto.split()
+
+        if not palabras_usuario:
+            continue
+
+        n_usuario = len(palabras_usuario)
+
+        # 2. Palabras de Whisper dentro de esta ventana de tiempo
+        palabras_ventana = [
+            w for w in palabras_whisper
+            if w["inicio"] >= t_inicio - 0.15 and w["fin"] <= t_fin + 0.25
+        ]
+        n_whisper = len(palabras_ventana)
+
+        if n_whisper == n_usuario and n_whisper > 0:
+            # Mapeo 1:1 perfecto: timing de Whisper, texto del usuario
+            for pw, pu in zip(palabras_ventana, palabras_usuario):
+                resultado.append({
+                    "palabra": pu,
+                    "inicio": pw["inicio"],
+                    "fin": pw["fin"],
+                })
+        elif n_whisper > 0:
+            # Distinto número de palabras: distribuir el usuario sobre el
+            # rango total detectado por Whisper
+            w_ini = palabras_ventana[0]["inicio"]
+            w_fin = palabras_ventana[-1]["fin"]
+            dur_total = max(w_fin - w_ini, 0.1)
+            dur_por_palabra = dur_total / n_usuario
+            for i, pu in enumerate(palabras_usuario):
+                pi = round(w_ini + i * dur_por_palabra, 3)
+                pf = round(pi + dur_por_palabra, 3)
+                resultado.append({"palabra": pu, "inicio": pi, "fin": pf})
+        else:
+            # Sin palabras de Whisper en la ventana — distribuir uniformemente
+            dur_total = max(t_fin - t_inicio, 0.5)
+            dur_por_palabra = dur_total / n_usuario
+            for i, pu in enumerate(palabras_usuario):
+                pi = round(t_inicio + i * dur_por_palabra, 3)
+                pf = round(pi + dur_por_palabra, 3)
+                resultado.append({"palabra": pu, "inicio": pi, "fin": pf})
+
+    return resultado
+
+
 def cargar_timestamps_directos(ruta_timestamps):
     """
     Carga timestamps directos (formato tiempos-v3.json):

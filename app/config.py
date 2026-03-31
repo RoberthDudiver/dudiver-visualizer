@@ -8,6 +8,7 @@ import os
 
 from app.scripts.lyric_video import (
     alinear_letra_con_whisper,
+    forzar_letra_sobre_timestamps,
     cargar_timestamps_directos,
     crear_frame_normal,
     crear_frame_alpha,
