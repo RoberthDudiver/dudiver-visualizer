@@ -202,6 +202,31 @@ class FontComboBox(ctk.CTkFrame):
         self._last_pos = (self.winfo_rootx(), self.winfo_rooty())
         self._poll_position()
 
+        # ── Bloquear scroll del panel mientras el popup está abierto ──────
+        # CTkScrollableFrame usa bind_all + check_if_master_is_canvas para
+        # scrollear. Parcheamos ese método en la instancia para que retorne
+        # False mientras el popup exista → el panel no scrollea.
+        self._patched_sf = None
+        w = self.master
+        while w is not None:
+            if hasattr(w, "_mouse_wheel_all") and hasattr(w, "_parent_canvas"):
+                orig = w.check_if_master_is_canvas
+                popup_ref = popup
+
+                def _patched(widget, _orig=orig, _pop=popup_ref):
+                    if _pop.winfo_exists():
+                        return False   # bloquear scroll del panel
+                    return _orig(widget)
+
+                w.check_if_master_is_canvas = _patched
+                self._patched_sf  = w
+                self._patched_orig = orig
+                break
+            try:
+                w = w.master
+            except Exception:
+                break
+
     def _place_popup(self):
         """Posicionar popup justo debajo del entry."""
         if not self._popup:
@@ -357,6 +382,15 @@ class FontComboBox(ctk.CTkFrame):
     # ── Cerrar ────────────────────────────────────────────────────────────────
 
     def _close(self):
+        # Restaurar check_if_master_is_canvas del CTkScrollableFrame
+        try:
+            sf = getattr(self, "_patched_sf", None)
+            if sf is not None:
+                sf.check_if_master_is_canvas = self._patched_orig
+        except Exception:
+            pass
+        self._patched_sf = None
+
         if self._popup and self._popup.winfo_exists():
             self._popup.destroy()
         self._popup      = None
