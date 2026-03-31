@@ -80,15 +80,15 @@ class ConfigPanel(ctk.CTkFrame):
         _full_dropdown(self.kinetic_frame, t("config.style"), estilo_kinetic_var,
                        list(ESTILOS_KINETIC.keys()), all_inputs)
 
-        # Fuente — combo con cada fuente en su propia tipografía
-        from app.ui.font_picker import FontMenuButton
+        # Fuente — combo estilo Office con cada fuente en su propia tipografía
+        from app.ui.font_picker import FontComboBox
         font_row = ctk.CTkFrame(modo_card, fg_color="transparent")
         font_row.pack(fill="x", padx=8, pady=2)
         ctk.CTkLabel(font_row, text=t("config.font"), font=("Segoe UI", 9),
                      text_color=DIM, width=50, anchor="w").pack(side="left")
         self._fuente_var = fuente_var
-        self._font_menu_btn = FontMenuButton(font_row, fuente_var, all_inputs)
-        self._font_menu_btn.pack(side="right", fill="x", expand=True)
+        font_combo = FontComboBox(font_row, fuente_var, all_inputs)
+        font_combo.pack(side="right", fill="x", expand=True)
 
         # Karaoke effects frame
         self.karaoke_efx_frame = ctk.CTkFrame(self, fg_color=DARK, corner_radius=0)
