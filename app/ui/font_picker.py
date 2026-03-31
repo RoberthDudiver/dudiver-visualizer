@@ -12,6 +12,10 @@ Estructura:
   │ ...                         │
   └─────────────────────────────┘
 
+Comportamiento:
+  - Al scrollear fuera del dropdown, se cierra automáticamente (como Word/Excel).
+  - Al mover la ventana principal, se cierra.
+
 Uso:
     combo = FontComboBox(parent, fuente_var, all_inputs)
     combo.pack(fill="x")
@@ -97,6 +101,10 @@ class FontComboBox(ctk.CTkFrame):
         self._hover_line: int | None = None
         self._search_var = tk.StringVar(value=fuente_var.get())
 
+        # Bindings globales para cerrar (scroll / mover ventana)
+        self._bind_scroll_id: str | None = None
+        self._bind_conf_id: str | None = None
+
         # ── Entry + flecha ──────────────────────────────────────────────────
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=0)
@@ -159,12 +167,11 @@ class FontComboBox(ctk.CTkFrame):
         if self._dropdown and self._dropdown.winfo_exists():
             return
         if not _ALL_FONTS:
-            # Fuentes aún no cargadas — cargar ahora de forma síncrona
             _ALL_FONTS = _collect_fonts()
 
         # Crear ventana sin decoración
         popup = tk.Toplevel(self)
-        popup.overrideredirect(True)         # sin barra de título
+        popup.overrideredirect(True)
         popup.configure(bg="#0f0f1e")
         popup.resizable(False, False)
         popup.attributes("-topmost", True)
@@ -207,9 +214,35 @@ class FontComboBox(ctk.CTkFrame):
         self._position_dropdown()
         self._filter(self._search_var.get())
 
-        # Cerrar al hacer clic fuera
-        popup.bind("<FocusOut>", lambda e: self.after(100, self._check_focus))
-        popup.bind("<Escape>",   lambda e: self._close_dropdown())
+        # ── Bindings para cerrar ──────────────────────────────────────────
+        # 1. Scroll fuera del dropdown → cerrar (como Word/Excel)
+        root = self.winfo_toplevel()
+        self._bind_scroll_id = root.bind(
+            "<MouseWheel>", self._on_root_scroll, add="+"
+        )
+        # 2. Ventana movida o redimensionada → cerrar
+        self._bind_conf_id = root.bind(
+            "<Configure>", self._on_root_configure, add="+"
+        )
+
+        popup.bind("<Escape>", lambda e: self._close_dropdown())
+
+    def _on_root_scroll(self, event):
+        """Si el scroll ocurre fuera del dropdown, cerrarlo."""
+        if not self._dropdown or not self._dropdown.winfo_exists():
+            return
+        # ¿Está el cursor sobre el propio popup?
+        px, py = self._dropdown.winfo_x(), self._dropdown.winfo_y()
+        pw, ph = self._dropdown.winfo_width(), self._dropdown.winfo_height()
+        if px <= event.x_root <= px + pw and py <= event.y_root <= py + ph:
+            return   # scroll dentro del dropdown → no cerrar
+        self._close_dropdown()
+
+    def _on_root_configure(self, event):
+        """Si la ventana principal se mueve, cerrar el dropdown."""
+        # Solo reaccionar a eventos del toplevel, no de sub-widgets
+        if event.widget is self.winfo_toplevel():
+            self._close_dropdown()
 
     def _position_dropdown(self):
         if not self._dropdown:
@@ -228,25 +261,23 @@ class FontComboBox(ctk.CTkFrame):
         txt.configure(state="normal")
         txt.delete("1.0", "end")
         for name in _ALL_FONTS:
-            tag = f"f_{id(name)}"   # tag único
-            # Usar la fuente real si es válida, sino Segoe UI
+            tag = f"f_{id(name)}"
             font_spec = (name, 13) if name in _VALID_FONTS else ("Segoe UI", 11)
             txt.tag_configure(tag, font=font_spec,
                               foreground="white",
                               spacing1=3, spacing3=3)
-            txt.tag_configure(tag + "_h",    # hover
+            txt.tag_configure(tag + "_h",
                               font=font_spec,
                               background="#1e1e3a",
                               foreground=ACCENT,
                               spacing1=3, spacing3=3)
-            txt.tag_configure(tag + "_sel",  # seleccionado
+            txt.tag_configure(tag + "_sel",
                               font=font_spec,
                               background="#1e1e3a",
                               foreground=ACCENT,
                               spacing1=3, spacing3=3)
             txt.insert("end", f"  {name}\n", tag)
 
-            # Bind click en cada línea
             line_no = _ALL_FONTS.index(name) + 1
             txt.tag_bind(tag, "<Button-1>",
                          lambda e, fn=name: self._select(fn))
@@ -279,7 +310,6 @@ class FontComboBox(ctk.CTkFrame):
         for name in fonts:
             tag = f"f_{id(name)}"
             font_spec = (name, 13) if name in _VALID_FONTS else ("Segoe UI", 11)
-            # Re-asegurar el tag (puede haberse perdido al borrar)
             txt.tag_configure(tag, font=font_spec,
                               foreground="white", spacing1=3, spacing3=3)
             txt.tag_bind(tag, "<Button-1>",
@@ -316,7 +346,6 @@ class FontComboBox(ctk.CTkFrame):
         if self._filtered:
             self._select(self._filtered[0])
         else:
-            # Escribieron un nombre exacto
             typed = self._search_var.get().strip()
             if typed:
                 self._select(typed)
@@ -362,11 +391,23 @@ class FontComboBox(ctk.CTkFrame):
     # ── Cerrar ────────────────────────────────────────────────────────────────
 
     def _close_dropdown(self):
+        # Desregistrar bindings globales
+        try:
+            root = self.winfo_toplevel()
+            if self._bind_scroll_id:
+                root.unbind("<MouseWheel>", self._bind_scroll_id)
+            if self._bind_conf_id:
+                root.unbind("<Configure>", self._bind_conf_id)
+        except Exception:
+            pass
+        self._bind_scroll_id = None
+        self._bind_conf_id = None
+
         if self._dropdown and self._dropdown.winfo_exists():
             self._dropdown.destroy()
         self._dropdown = None
         self._text_widget = None
-        self._built = False   # forzar rebuild en siguiente apertura (filtro limpio)
+        self._built = False
 
     def _check_focus(self):
         """Cerrar si el foco ya no está en el combo ni en el dropdown."""
