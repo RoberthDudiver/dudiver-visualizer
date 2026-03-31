@@ -1,252 +1,163 @@
-"""Font Picker — ventana emergente que muestra cada fuente en sí misma."""
+"""Font Picker — dropdown nativo (tk.Menu) con cada fuente en su propia tipografía.
+
+Flujo:
+  1. Al importar el módulo, preload_fonts() se puede llamar desde el hilo principal
+     con after() para cargar las fuentes sin bloquear la UI.
+  2. FontMenuButton es un CTkButton que, al hacer clic, abre un tk.Menu
+     posicionado justo debajo del botón (sensación de combo real).
+  3. El menú se construye UNA sola vez y se reutiliza (caché).
+"""
 
 import tkinter as tk
 import tkinter.font as tkfont
 import customtkinter as ctk
 
-from app.config import ACCENT, ACCENT_H, DARK, CARD, INPUT_BG, DIM, GOLD
+from app.config import ACCENT, DARK, CARD, INPUT_BG, DIM
+
+# ── Estado global del módulo ──────────────────────────────────────────────────
+_ALL_FONTS: list[str] = []       # lista ordenada de nombres de fuente
+_TK_FONTS: dict[str, object] = {}  # nombre → tkfont.Font (o None si no disponible)
+_PRELOAD_DONE = False
 
 
-# Texto de muestra que se muestra junto al nombre de cada fuente
-_PREVIEW_TEXT = "Aa Bb 123"
-
-
-def _get_fonts():
-    """Retorna lista de fuentes disponibles (tkinter + manimpango unificados)."""
-    fonts = set()
+def _collect_font_names() -> list[str]:
+    """Recopila fuentes de manimpango + tkinter, elimina duplicados y @-fuentes."""
+    names: set[str] = set()
     try:
         import manimpango
-        fonts.update(manimpango.list_fonts())
+        names.update(manimpango.list_fonts())
     except Exception:
         pass
     try:
-        fonts.update(tkfont.families())
+        names.update(tkfont.families())
     except Exception:
         pass
-    # Excluir fuentes que empiezan con @ (orientales verticales)
-    fonts = sorted(f for f in fonts if not f.startswith("@"))
-    return fonts
+    if not names:
+        names = {"Arial", "Impact", "Segoe UI", "Roboto", "Calibri",
+                 "Consolas", "Georgia", "Tahoma", "Verdana", "Comic Sans MS"}
+    return sorted(f for f in names if not f.startswith("@"))
 
 
-class FontPickerDialog(ctk.CTkToplevel):
-    """Diálogo modal para seleccionar fuente con preview visual."""
+def preload_fonts(root: tk.Misc, batch: int = 40, delay_ms: int = 10) -> None:
+    """Pre-carga todas las fuentes en el hilo principal usando after() por lotes.
 
-    def __init__(self, parent, fuente_var, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
-        self.fuente_var = fuente_var
-        self.title("Seleccionar Fuente")
-        self.geometry("520x580")
-        self.resizable(True, True)
-        self.configure(fg_color=DARK)
-        self.grab_set()   # modal
-        self.focus_set()
+    Llamar una sola vez desde el hilo principal (ej. en VisualizerApp.__init__
+    después de construir la ventana).  No bloquea la UI.
+    """
+    global _ALL_FONTS, _PRELOAD_DONE
 
-        self._all_fonts = _get_fonts()
-        self._visible_fonts = list(self._all_fonts)
-        self._font_cache = {}   # nombre → tkFont instance (o None si falla)
-        self._selected = fuente_var.get()
-        self._item_height = 52
-        self._items_on_screen = []
+    if _PRELOAD_DONE:
+        return
 
-        self._build()
-        self._filter("")
-        # Scroll hasta la fuente seleccionada
-        self.after(100, self._scroll_to_selected)
+    _ALL_FONTS = _collect_font_names()
+    names = list(_ALL_FONTS)
+    idx = [0]  # mutable para capturar en closure
 
-    # ── Build ──────────────────────────────────────────────────────────────────
-
-    def _build(self):
-        # Header
-        hdr = ctk.CTkFrame(self, fg_color=CARD, corner_radius=0, height=48)
-        hdr.pack(fill="x")
-        hdr.pack_propagate(False)
-        ctk.CTkLabel(hdr, text="Fuente", font=("Segoe UI Black", 14),
-                     text_color=ACCENT).pack(side="left", padx=14, pady=10)
-
-        # Search bar
-        search_frame = ctk.CTkFrame(self, fg_color="#12121e", corner_radius=0, height=42)
-        search_frame.pack(fill="x")
-        search_frame.pack_propagate(False)
-
-        self._search_var = tk.StringVar()
-        self._search_var.trace_add("write", lambda *_: self._filter(self._search_var.get()))
-
-        search_entry = ctk.CTkEntry(search_frame, textvariable=self._search_var,
-                                    placeholder_text="Buscar fuente...",
-                                    font=("Segoe UI", 11), fg_color=INPUT_BG,
-                                    border_color="#2a2a4a", height=30,
-                                    corner_radius=6)
-        search_entry.pack(fill="x", padx=10, pady=6)
-        search_entry.focus_set()
-
-        # Canvas + scrollbar (lista virtual)
-        list_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
-        list_frame.pack(fill="both", expand=True, padx=0, pady=0)
-
-        self._canvas = tk.Canvas(list_frame, bg="#0c0c18", highlightthickness=0,
-                                 bd=0)
-        vsb = tk.Scrollbar(list_frame, orient="vertical",
-                           command=self._canvas.yview)
-        self._canvas.configure(yscrollcommand=vsb.set)
-
-        vsb.pack(side="right", fill="y")
-        self._canvas.pack(side="left", fill="both", expand=True)
-
-        # Frame interior del canvas
-        self._inner = tk.Frame(self._canvas, bg="#0c0c18")
-        self._canvas_window = self._canvas.create_window(
-            (0, 0), window=self._inner, anchor="nw")
-
-        self._inner.bind("<Configure>", self._on_inner_configure)
-        self._canvas.bind("<Configure>", self._on_canvas_configure)
-        self._canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self._inner.bind("<MouseWheel>", self._on_mousewheel)
-
-        # Footer con botón cancelar
-        footer = ctk.CTkFrame(self, fg_color=CARD, corner_radius=0, height=44)
-        footer.pack(fill="x", side="bottom")
-        footer.pack_propagate(False)
-        ctk.CTkButton(footer, text="Cancelar", width=90, height=30,
-                      font=("Segoe UI", 10), fg_color="#2a2a4a",
-                      hover_color="#3a3a5a", corner_radius=6,
-                      command=self.destroy).pack(side="right", padx=10, pady=7)
-        self._count_label = ctk.CTkLabel(footer, text="",
-                                         font=("Segoe UI", 9), text_color=DIM)
-        self._count_label.pack(side="left", padx=10)
-
-    # ── Font cache ─────────────────────────────────────────────────────────────
-
-    def _get_tk_font(self, name, size=14):
-        key = (name, size)
-        if key not in self._font_cache:
-            try:
-                f = tkfont.Font(family=name, size=size)
-                # Verificar que realmente se aplicó la fuente pedida
-                if f.actual()["family"].lower() != name.lower():
-                    self._font_cache[key] = None
-                else:
-                    self._font_cache[key] = f
-            except Exception:
-                self._font_cache[key] = None
-        return self._font_cache[key]
-
-    # ── Filter ─────────────────────────────────────────────────────────────────
-
-    def _filter(self, query):
-        q = query.strip().lower()
-        if q:
-            self._visible_fonts = [f for f in self._all_fonts
-                                    if q in f.lower()]
+    def _load_batch():
+        start = idx[0]
+        end = min(start + batch, len(names))
+        for name in names[start:end]:
+            if name not in _TK_FONTS:
+                try:
+                    f = tkfont.Font(family=name, size=11)
+                    _TK_FONTS[name] = f if f.actual()["family"].lower() == name.lower() else None
+                except Exception:
+                    _TK_FONTS[name] = None
+        idx[0] = end
+        if end < len(names):
+            root.after(delay_ms, _load_batch)
         else:
-            self._visible_fonts = list(self._all_fonts)
-        self._count_label.configure(
-            text=f"{len(self._visible_fonts)} fuentes")
-        self._rebuild_list()
+            global _PRELOAD_DONE
+            _PRELOAD_DONE = True
 
-    # ── List ───────────────────────────────────────────────────────────────────
+    root.after(50, _load_batch)   # empieza 50ms después del inicio
 
-    def _rebuild_list(self):
-        # Destruir items anteriores
-        for w in self._inner.winfo_children():
-            w.destroy()
-        self._items_on_screen.clear()
 
-        selected = self._selected
+# ── Widget ────────────────────────────────────────────────────────────────────
 
-        for font_name in self._visible_fonts:
-            is_sel = font_name == selected
-            bg = "#1e1e3a" if is_sel else "#0c0c18"
-            hover_bg = "#252540"
+class FontMenuButton(ctk.CTkFrame):
+    """Botón + dropdown-menu: cada fuente renderizada en sí misma."""
 
-            row = tk.Frame(self._inner, bg=bg, cursor="hand2",
-                           height=self._item_height)
-            row.pack(fill="x", pady=1, padx=2)
-            row.pack_propagate(False)
+    def __init__(self, parent, fuente_var: ctk.StringVar,
+                 all_inputs: list, **frame_kw):
+        super().__init__(parent, fg_color="transparent", **frame_kw)
+        self._var = fuente_var
+        self._menu: tk.Menu | None = None     # se construye la primera vez
+        self._menu_built = False
 
-            # Preview del texto en la propia fuente
-            tk_font = self._get_tk_font(font_name, 16)
-            if tk_font:
-                preview = tk.Label(row, text=_PREVIEW_TEXT,
-                                   font=tk_font,
-                                   bg=bg, fg="#e0e0ff",
-                                   anchor="w", padx=12)
-                preview.pack(side="left")
-            else:
-                # Fuente no disponible para tkinter — mostrar con fuente por defecto
-                tk.Label(row, text=_PREVIEW_TEXT,
-                         font=("Segoe UI", 14),
-                         bg=bg, fg="#555568",
-                         anchor="w", padx=12).pack(side="left")
+        # Botón principal
+        self._btn = ctk.CTkButton(
+            self,
+            textvariable=fuente_var,
+            height=28, corner_radius=6,
+            fg_color=INPUT_BG, hover_color="#2a2a4a",
+            text_color="white",
+            anchor="w",
+            command=self._toggle_menu,
+        )
+        self._btn.pack(fill="x")
+        all_inputs.append(self._btn)
 
-            # Nombre de la fuente (pequeño, tenue)
-            name_lbl = tk.Label(row, text=font_name,
-                                font=("Segoe UI", 9),
-                                bg=bg, fg=ACCENT if is_sel else "#9090b0",
-                                anchor="e", padx=10)
-            name_lbl.pack(side="right", fill="x", expand=True)
+        # Actualizar la fuente del botón cuando cambia la selección
+        fuente_var.trace_add("write", lambda *_: self._refresh_btn_font())
+        self._refresh_btn_font()
 
-            # Barra de selección izquierda
-            if is_sel:
-                bar = tk.Frame(row, bg=ACCENT, width=3)
-                bar.place(x=0, y=0, relheight=1)
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
-            # Bind eventos
-            def _select(e, fn=font_name):
-                self._choose(fn)
-
-            def _enter(e, r=row, fn=font_name):
-                for w in r.winfo_children():
-                    try:
-                        w.configure(bg=hover_bg)
-                    except Exception:
-                        pass
-                r.configure(bg=hover_bg)
-
-            def _leave(e, r=row, fn=font_name, b=bg):
-                for w in r.winfo_children():
-                    try:
-                        w.configure(bg=b)
-                    except Exception:
-                        pass
-                r.configure(bg=b)
-
-            for widget in [row] + list(row.winfo_children()):
-                widget.bind("<Button-1>", _select)
-                widget.bind("<Enter>", _enter)
-                widget.bind("<Leave>", _leave)
-                widget.bind("<MouseWheel>", self._on_mousewheel)
-
-            self._items_on_screen.append((font_name, row))
-
-        # Actualizar scroll
-        self._inner.update_idletasks()
-        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
-
-    def _choose(self, font_name):
-        self._selected = font_name
-        self.fuente_var.set(font_name)
-        self.destroy()
-
-    # ── Scroll helpers ─────────────────────────────────────────────────────────
-
-    def _scroll_to_selected(self):
-        if not self._visible_fonts:
-            return
+    def _refresh_btn_font(self):
+        """Muestra el nombre de la fuente en la propia tipografía."""
+        name = self._var.get()
         try:
-            idx = self._visible_fonts.index(self._selected)
-        except ValueError:
-            return
-        total = len(self._visible_fonts)
-        if total == 0:
-            return
-        frac = idx / total
-        self._canvas.yview_moveto(max(0, frac - 0.1))
+            self._btn.configure(font=(name, 11))
+        except Exception:
+            self._btn.configure(font=("Segoe UI", 11))
 
-    def _on_inner_configure(self, event):
-        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+    def _build_menu(self):
+        """Construye el tk.Menu una sola vez con todas las fuentes."""
+        root = self.winfo_toplevel()
+        menu = tk.Menu(root, tearoff=0,
+                       bg="#12122a", fg="white",
+                       activebackground=ACCENT, activeforeground="white",
+                       bd=0, relief="flat")
 
-    def _on_canvas_configure(self, event):
-        self._canvas.itemconfig(self._canvas_window, width=event.width)
+        fonts = _ALL_FONTS if _ALL_FONTS else _collect_font_names()
 
-    def _on_mousewheel(self, event):
-        self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        # Agrupar por letra inicial en sub-menús (hace el menú más manejable)
+        groups: dict[str, list[str]] = {}
+        for name in fonts:
+            key = name[0].upper()
+            groups.setdefault(key, []).append(name)
+
+        for letter in sorted(groups):
+            sub = tk.Menu(menu, tearoff=0,
+                          bg="#12122a", fg="white",
+                          activebackground=ACCENT, activeforeground="white",
+                          bd=0, relief="flat")
+            for font_name in groups[letter]:
+                tk_font = _TK_FONTS.get(font_name)
+                kw = {"font": tk_font} if tk_font else {}
+                sub.add_command(
+                    label=font_name,
+                    command=lambda fn=font_name: self._select(fn),
+                    **kw,
+                )
+            menu.add_cascade(label=f"  {letter}", menu=sub,
+                             font=("Segoe UI Bold", 10))
+
+        self._menu = menu
+        self._menu_built = True
+
+    def _toggle_menu(self):
+        if not self._menu_built:
+            self._build_menu()
+
+        try:
+            # Posicionar justo debajo del botón
+            x = self._btn.winfo_rootx()
+            y = self._btn.winfo_rooty() + self._btn.winfo_height()
+            self._menu.tk_popup(x, y)
+        finally:
+            self._menu.grab_release()
+
+    def _select(self, font_name: str):
+        self._var.set(font_name)

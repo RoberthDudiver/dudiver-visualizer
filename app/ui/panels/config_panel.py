@@ -80,31 +80,15 @@ class ConfigPanel(ctk.CTkFrame):
         _full_dropdown(self.kinetic_frame, t("config.style"), estilo_kinetic_var,
                        list(ESTILOS_KINETIC.keys()), all_inputs)
 
-        # Fuente — botón que abre el font picker visual
+        # Fuente — combo con cada fuente en su propia tipografía
+        from app.ui.font_picker import FontMenuButton
         font_row = ctk.CTkFrame(modo_card, fg_color="transparent")
         font_row.pack(fill="x", padx=8, pady=2)
         ctk.CTkLabel(font_row, text=t("config.font"), font=("Segoe UI", 9),
                      text_color=DIM, width=50, anchor="w").pack(side="left")
-
-        font_btn_frame = ctk.CTkFrame(font_row, fg_color="transparent")
-        font_btn_frame.pack(side="right", fill="x", expand=True)
-
-        # El botón muestra el nombre de la fuente seleccionada en esa misma fuente
         self._fuente_var = fuente_var
-        self._font_btn = ctk.CTkButton(
-            font_btn_frame,
-            textvariable=fuente_var,
-            height=28, corner_radius=6,
-            fg_color=INPUT_BG, hover_color="#2a2a4a",
-            text_color="white",
-            anchor="w",
-            command=lambda: self._open_font_picker(fuente_var),
-        )
-        self._font_btn.pack(fill="x")
-        all_inputs.append(self._font_btn)
-
-        # Actualizar la fuente del botón cuando cambia la selección
-        fuente_var.trace_add("write", lambda *_: self._update_font_btn())
+        self._font_menu_btn = FontMenuButton(font_row, fuente_var, all_inputs)
+        self._font_menu_btn.pack(side="right", fill="x", expand=True)
 
         # Karaoke effects frame
         self.karaoke_efx_frame = ctk.CTkFrame(self, fg_color=DARK, corner_radius=0)
@@ -288,24 +272,6 @@ class ConfigPanel(ctk.CTkFrame):
 
         # Init visibility
         self._update_mode(modo_var.get())
-
-    def _open_font_picker(self, fuente_var):
-        from app.ui.font_picker import FontPickerDialog
-        FontPickerDialog(self, fuente_var)
-
-    def _update_font_btn(self):
-        """Muestra el nombre de la fuente seleccionada en la propia fuente."""
-        import tkinter.font as tkfont
-        name = self._fuente_var.get()
-        try:
-            f = tkfont.Font(family=name, size=11)
-            if f.actual()["family"].lower() == name.lower():
-                self._font_btn.configure(font=f)
-                return
-        except Exception:
-            pass
-        # Fallback: fuente del sistema
-        self._font_btn.configure(font=("Segoe UI", 11))
 
     def _update_mode(self, modo):
         if modo == "Kinetic Typography":

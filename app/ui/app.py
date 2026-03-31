@@ -148,6 +148,10 @@ class VisualizerApp(ctk.CTk):
 
         self._build()
 
+        # Pre-cargar fuentes en background (lotes de 40 cada 10ms, no bloquea la UI)
+        from app.ui.font_picker import preload_fonts
+        preload_fonts(self)
+
     # ══════════════════════════════════════════════════════════════════════════
     #  BUILD UI
     # ══════════════════════════════════════════════════════════════════════════
