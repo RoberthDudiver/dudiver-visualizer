@@ -79,7 +79,7 @@ ESTILOS_KINETIC = {
     "Glitch": "glitch",
     "Bounce Drop": "bounce",
     "Cinematic": "cinematic",
-    "One Word": "oneword",
+    "One Line": "oneline",
 }
 
 ESQUEMAS_KINETIC_GUI = {

@@ -812,21 +812,11 @@ class VisualizerApp(ctk.CTk):
         palabras = self._load_palabras_whisper()
         estilo_val = ESTILOS_KINETIC.get(estilo, "wave")
 
-        if estilo_val == "oneword":
-            if palabras:
-                from app.core.kinetic_pil import group_smart_oneword
-                palabras = group_smart_oneword(palabras)
-                img = self._draw_kinetic_oneword(img, palabras, t, ancho, alto,
-                                                 font_path, font_size, color_activo,
-                                                 glow_color, effects=_efx_prev)
-            else:
-                timing_fb = self._ensure_timing(lines) or fallback_timing(lines, self._dur or 180)
-                pseudo = [{"inicio": ts.get("inicio", 0), "fin": ts.get("fin", 0),
-                           "palabra": ts.get("texto", ts.get("linea", ""))}
-                          for ts in timing_fb if ts.get("texto", ts.get("linea", "")).strip()]
-                img = self._draw_kinetic_oneword(img, pseudo, t, ancho, alto,
-                                                 font_path, font_size, color_activo,
-                                                 glow_color, effects=_efx_prev)
+        if estilo_val == "oneline":
+            timing_lines = self._ensure_timing(lines) or fallback_timing(lines, self._dur or 180)
+            img = self._draw_kinetic_oneline(img, timing_lines, t, ancho, alto,
+                                             font_path, font_size, color_activo,
+                                             glow_color, effects=_efx_prev)
         elif palabras:
             img = self._draw_kinetic_words(img, palabras, t, ancho, alto,
                                            fuente, font_path, font_size,
@@ -839,6 +829,81 @@ class VisualizerApp(ctk.CTk):
                                            color_futuro, glow_color, effects=_efx_prev)
 
         img = self._apply_kinetic_effects(img, ancho, alto, t, _efx_prev, esquema)
+        return img
+
+    def _draw_kinetic_oneline(self, img, timing_lines, t, ancho, alto,
+                              font_path, font_size, color_activo, glow_color,
+                              effects=None):
+        """Solo la línea activa centrada, las demás invisibles."""
+        from PIL import ImageFont, ImageDraw, ImageFilter
+
+        # Buscar línea activa
+        activa = None
+        for item in timing_lines:
+            ini = item.get("inicio", 0)
+            fin = item.get("fin", 0)
+            if ini <= t <= fin:
+                activa = item
+                break
+
+        if not activa:
+            return img
+
+        texto = (activa.get("texto") or activa.get("linea") or "").strip()
+        if not texto:
+            return img
+
+        draw = ImageDraw.Draw(img)
+
+        def _font(sz):
+            try:
+                return ImageFont.truetype(font_path, sz)
+            except Exception:
+                return ImageFont.truetype("arial.ttf", sz)
+
+        f = _font(font_size)
+        bbox = draw.textbbox((0, 0), texto, font=f)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+
+        # Reducir si es muy ancho
+        if tw > ancho * 0.9:
+            scale = (ancho * 0.9) / tw
+            f = _font(int(font_size * scale))
+            bbox = draw.textbbox((0, 0), texto, font=f)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+
+        cx = ancho // 2
+        cy = self._kinetic_base_y(font_size, alto)
+
+        # Recuadro detrás del texto
+        if effects and effects.get("text_box", False):
+            from app.scripts.lyric_video import _draw_text_box
+            opacity = int(effects.get("text_box_opacity", 70) * 2.55)
+            radius = int(effects.get("text_box_radius", 8))
+            pad_x, pad_y = 20, 12
+            x1 = cx - tw // 2 - pad_x
+            y1 = cy - pad_y
+            x2 = cx + tw // 2 + pad_x
+            y2 = cy + th + pad_y
+            _draw_text_box(img, x1, y1, x2, y2, opacity, radius)
+
+        # Glow
+        if effects and effects.get("glow"):
+            try:
+                glow_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+                gd = ImageDraw.Draw(glow_layer)
+                gd.text((cx, cy), texto, fill=glow_color + "50",
+                        font=f, anchor="mt")
+                glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(radius=6))
+                img = Image.alpha_composite(img.convert("RGBA"),
+                                            glow_layer).convert("RGBA")
+                draw = ImageDraw.Draw(img)
+            except Exception:
+                pass
+
+        draw.text((cx, cy), texto, fill=color_activo, font=f, anchor="mt")
         return img
 
     def _draw_kinetic_oneword(self, img, palabras, t, ancho, alto,

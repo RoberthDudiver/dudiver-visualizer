@@ -401,7 +401,6 @@ class KineticPILRenderer:
                 palabras = group_smart_oneword(palabras)
                 self.on_log(f"Oneword inteligente: {len(palabras)} grupos")
             elif segmentos:
-                # Fallback: sin palabras individuales, usar segmentos de línea
                 palabras = [{"inicio": s["inicio"], "fin": s["fin"],
                              "palabra": s.get("linea", s.get("texto", ""))}
                             for s in segmentos
@@ -461,6 +460,13 @@ class KineticPILRenderer:
                     if self.estilo == "oneword":
                         frame = self._render_oneword_frame(
                             t, bg_img, palabras, beat_times, anim_fn)
+                    elif self.estilo == "oneline":
+                        lineas_display = segmentos if segmentos else [
+                            {"linea": " ".join(w["palabra"] for w in frase),
+                             "inicio": frase[0]["inicio"], "fin": frase[-1]["fin"]}
+                            for frase in frases]
+                        frame = self._render_oneline_frame(
+                            t, bg_img, lineas_display, beat_times, anim_fn)
                     else:
                         # Usar segmentos (líneas) para display multi-línea fiel al preview
                         lineas_display = segmentos if segmentos else [
@@ -818,6 +824,68 @@ class KineticPILRenderer:
 
         return frame
 
+    def _render_oneline_frame(self, t, bg_img, lineas, beat_times, anim_fn):
+        """Frame One Line: solo la línea activa, centrada, las demás invisibles."""
+        frame = self._get_bg_frame(t)
+        if not lineas:
+            return frame
+
+        # Buscar línea activa
+        activa = None
+        for linea in lineas:
+            ini = linea.get("inicio", 0)
+            fin = linea.get("fin", 0)
+            if ini <= t <= fin:
+                activa = linea
+                break
+
+        if not activa:
+            return frame
+
+        texto = (activa.get("linea") or activa.get("texto") or "").strip()
+        if not texto:
+            return frame
+
+        dur = max(activa["fin"] - activa["inicio"], 0.05)
+        progress = (t - activa["inicio"]) / dur
+        progress = max(0.0, min(1.0, progress))
+        x_off, y_off, scale, alpha = anim_fn(progress, 0, self.ancho, self.alto)
+
+        # Renderizar texto al tamaño normal del slider
+        text_img = self._render_text_img(texto, self.font_size, self.esquema["activo"])
+
+        # Ajustar si el texto es más ancho que la pantalla
+        max_w = self.ancho * 0.9
+        if text_img.width * scale > max_w:
+            scale *= max_w / (text_img.width * scale)
+
+        cx = self.ancho // 2 + x_off
+        base_cy = self._calc_lyrics_y(self.font_size) + self.font_size // 2
+        cy = base_cy + y_off
+
+        # Beat pulse
+        bi = beat_intensity(t, beat_times)
+        if bi > 0.3:
+            scale *= 1.0 + bi * 0.08
+
+        # Recuadro
+        actual_w = int(text_img.width * scale)
+        actual_h = int(text_img.height * scale)
+        frame = self._draw_kinetic_text_box(frame, cx, cy - actual_h // 2, actual_w, actual_h)
+
+        # Glow
+        if self.effects and self.effects.get("glow") and alpha > 50:
+            glow_key = (texto, self.font_size, "oneline_glow")
+            if glow_key not in self.cache._cache:
+                glow_img = self._render_text_img(texto, self.font_size, self.esquema["glow"])
+                self.cache._cache[glow_key] = glow_img.filter(
+                    ImageFilter.GaussianBlur(radius=6))
+            self._composite_text(frame, self.cache._cache[glow_key], cx, cy,
+                                 scale=scale, alpha=min(alpha, 80))
+
+        self._composite_text(frame, text_img, cx, cy, scale=scale, alpha=alpha)
+        return frame
+
     def _render_phrase_frame(self, t, bg_img, lineas, beat_times, anim_fn):
         """Frame multi-línea: muestra ventana de líneas con la activa destacada (idéntico al preview)."""
         frame = self._get_bg_frame(t)
@@ -1145,6 +1213,8 @@ class KineticPILRenderer:
             frame = self._get_bg_frame(t)
         elif self.estilo == "oneword":
             frame = self._render_oneword_frame(t, None, palabras, beat_times, anim_fn)
+        elif self.estilo == "oneline":
+            frame = self._render_oneline_frame(t, None, lineas_display, beat_times, anim_fn)
         else:
             frame = self._render_phrase_frame(t, None, lineas_display, beat_times, anim_fn)
 
