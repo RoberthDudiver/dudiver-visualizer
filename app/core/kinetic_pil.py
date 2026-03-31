@@ -311,6 +311,7 @@ class KineticPILRenderer:
         self.alpha_mode = config.get("alpha_mode", False)
         self.effects = config.get("effects")
         self.lyrics_pos = config.get("lyrics_pos", "Centro")
+        self.lyrics_align = config.get("lyrics_align", "Centro")
         self.lyrics_margin = config.get("lyrics_margin", 40)
         self.lyrics_extra_y = config.get("lyrics_extra_y", 0)
         self._bg_is_video = False
@@ -697,6 +698,25 @@ class KineticPILRenderer:
         base_y += offset
         return max(0, min(self.alto - max(total_h, 1), base_y))
 
+    def _calc_lyrics_x(self, text_w):
+        """Calcula (cx, anchor_h) según alineación horizontal configurada.
+
+        Retorna (cx, anchor_h) donde anchor_h es 'l', 'm' o 'r' (PIL).
+        """
+        align = getattr(self, 'lyrics_align', 'Centro')
+        margin = self.lyrics_margin
+        if align == "Izquierda":
+            cx = margin
+            anchor_h = "l"
+        elif align == "Derecha":
+            cx = self.ancho - margin
+            anchor_h = "r"
+        else:
+            cx = self.ancho // 2
+            anchor_h = "m"
+        cx = max(margin, min(self.ancho - margin, cx))
+        return cx, anchor_h
+
     def _draw_kinetic_text_box(self, frame, cx, y, text_w, text_h):
         """Dibuja recuadro detrás del texto kinetic si está activado."""
         if not (self.effects and self.effects.get("text_box", False)):
@@ -859,7 +879,8 @@ class KineticPILRenderer:
         if text_img.width * scale > max_w:
             scale *= max_w / (text_img.width * scale)
 
-        cx = self.ancho // 2 + x_off
+        cx_base, _anchor_h = self._calc_lyrics_x(int(text_img.width * scale))
+        cx = cx_base + x_off
         base_cy = self._calc_lyrics_y(self.font_size) + self.font_size // 2
         cy = base_cy + y_off
 
@@ -937,12 +958,15 @@ class KineticPILRenderer:
                 # Tamaño ligeramente mayor para la línea activa
                 sz = int(sz * 1.15)
 
+            # Alineación horizontal
+            cx_line, _ah = self._calc_lyrics_x(int(tmp.width * scale))
+
             # Recuadro detrás del texto
             if self.effects and self.effects.get("text_box", False):
                 text_w = int(tmp.width * scale)
                 if is_active:
                     text_w = int(text_w * 1.15)  # Igualar al tamaño real de la línea activa
-                frame = self._draw_kinetic_text_box(frame, self.ancho // 2,
+                frame = self._draw_kinetic_text_box(frame, cx_line,
                                                     y, text_w, line_h)
 
             if is_active:
@@ -976,13 +1000,13 @@ class KineticPILRenderer:
                     self.cache._cache[glow_key] = gi.filter(
                         ImageFilter.GaussianBlur(radius=6))
                 self._composite_text(frame, self.cache._cache[glow_key],
-                                     self.ancho // 2 + x_off,
+                                     cx_line + x_off,
                                      y + line_h // 2 + y_off,
                                      scale=1.0, alpha=60)
 
                 text_img = self._render_text_img(texto_anim, final_sz, color)
                 self._composite_text(frame, text_img,
-                                     self.ancho // 2 + x_off,
+                                     cx_line + x_off,
                                      y + line_h // 2 + y_off,
                                      scale=1.0, alpha=alpha)
             elif is_past:
@@ -990,14 +1014,14 @@ class KineticPILRenderer:
                 alpha = 160
                 text_img = self._render_text_img(texto, sz, color)
                 self._composite_text(frame, text_img,
-                                     self.ancho // 2, y + line_h // 2,
+                                     cx_line, y + line_h // 2,
                                      scale=1.0, alpha=alpha)
             else:
                 color = self.esquema["futuro"]
                 alpha = 110
                 text_img = self._render_text_img(texto, sz, color)
                 self._composite_text(frame, text_img,
-                                     self.ancho // 2, y + line_h // 2,
+                                     cx_line, y + line_h // 2,
                                      scale=1.0, alpha=alpha)
 
         return frame

@@ -62,7 +62,7 @@ class ConfigPanel(ctk.CTkFrame):
                  modo_var, estilo_kinetic_var, fuente_var,
                  formato_var=None,
                  chk_particulas, chk_onda, chk_vineta, chk_glow, chk_barra,
-                 lyrics_pos_var=None, lyrics_margin_var=None,
+                 lyrics_pos_var=None, lyrics_align_var=None, lyrics_margin_var=None,
                  chk_text_box=None, text_box_opacity_var=None,
                  text_box_radius_var=None, chk_dim_bg=None,
                  all_inputs):
@@ -213,10 +213,10 @@ class ConfigPanel(ctk.CTkFrame):
             pos_card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
             pos_card.pack(fill="x", padx=4, pady=(0, 4))
 
-            # Fila: dropdown posición
+            # Fila: dropdown vertical (Arriba / Centro / Abajo)
             pos_row = ctk.CTkFrame(pos_card, fg_color="transparent")
             pos_row.pack(fill="x", padx=8, pady=(6, 2))
-            ctk.CTkLabel(pos_row, text="Posición", font=("Segoe UI", 9),
+            ctk.CTkLabel(pos_row, text="Vertical", font=("Segoe UI", 9),
                          text_color=DIM, width=50, anchor="w").pack(side="left")
             pos_dd = ctk.CTkOptionMenu(pos_row, variable=lyrics_pos_var,
                                        values=["Arriba", "Centro", "Abajo"],
@@ -226,6 +226,21 @@ class ConfigPanel(ctk.CTkFrame):
                                        corner_radius=6, height=26)
             pos_dd.pack(side="right", fill="x", expand=True)
             all_inputs.append(pos_dd)
+
+            # Fila: dropdown horizontal (Izquierda / Centro / Derecha)
+            if lyrics_align_var is not None:
+                align_row = ctk.CTkFrame(pos_card, fg_color="transparent")
+                align_row.pack(fill="x", padx=8, pady=(0, 2))
+                ctk.CTkLabel(align_row, text="Alinear", font=("Segoe UI", 9),
+                             text_color=DIM, width=50, anchor="w").pack(side="left")
+                align_dd = ctk.CTkOptionMenu(align_row, variable=lyrics_align_var,
+                                             values=["Izquierda", "Centro", "Derecha"],
+                                             font=("Segoe UI", 10), fg_color=INPUT_BG,
+                                             button_color="#2a2a4a", button_hover_color=ACCENT,
+                                             dropdown_fg_color=CARD, dropdown_hover_color=ACCENT,
+                                             corner_radius=6, height=26)
+                align_dd.pack(side="right", fill="x", expand=True)
+                all_inputs.append(align_dd)
 
             # Fila: slider margen
             mg_cell = ctk.CTkFrame(pos_card, fg_color="transparent")

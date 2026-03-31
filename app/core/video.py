@@ -212,6 +212,7 @@ class VideoGenerator:
                     frame = crear_frame_alpha(ancho, alto, timing, t, duracion,
                                               beat_times, fuente, fuente_titulo, titulo,
                                               lyrics_pos=self.cfg.get("lyrics_pos", "Centro"),
+                                              lyrics_align=self.cfg.get("lyrics_align", "Centro"),
                                               lyrics_margin=self.cfg.get("lyrics_margin", 40),
                                               lyrics_extra_y=self.cfg.get("lyrics_extra_y", 0),
                                               effects=self.cfg.get("effects"))
@@ -305,6 +306,7 @@ class VideoGenerator:
                                      parts, titulo, cur_bg,
                                      effects=self.cfg.get("effects"),
                                      lyrics_pos=self.cfg.get("lyrics_pos", "Centro"),
+                                     lyrics_align=self.cfg.get("lyrics_align", "Centro"),
                                      lyrics_margin=self.cfg.get("lyrics_margin", 40),
                                      lyrics_extra_y=self.cfg.get("lyrics_extra_y", 0))
 
@@ -454,6 +456,7 @@ class VideoGenerator:
                 "platform_urls": cfg.get("platform_urls"),
                 # Posición de letra (crítico para que render = preview)
                 "lyrics_pos": cfg.get("lyrics_pos", "Centro"),
+                "lyrics_align": cfg.get("lyrics_align", "Centro"),
                 "lyrics_margin": cfg.get("lyrics_margin", 40),
                 "lyrics_extra_y": cfg.get("lyrics_extra_y", 0),
             }

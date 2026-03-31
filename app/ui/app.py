@@ -126,6 +126,7 @@ class VisualizerApp(ctk.CTk):
         self.preview_time = ctk.DoubleVar(value=0.0)
         # Posición de letras
         self.lyrics_pos_var = ctk.StringVar(value="Centro")
+        self.lyrics_align_var = ctk.StringVar(value="Centro")   # horizontal
         self.lyrics_margin_var = ctk.IntVar(value=40)
         self._lyrics_drag_offset = 0   # offset acumulado en píxeles de video
         self._preview_scale = 1.0      # ratio canvas/video para convertir drag
@@ -216,6 +217,7 @@ class VisualizerApp(ctk.CTk):
                                         chk_glow=self.chk_glow,
                                         chk_barra=self.chk_barra,
                                         lyrics_pos_var=self.lyrics_pos_var,
+                                        lyrics_align_var=self.lyrics_align_var,
                                         lyrics_margin_var=self.lyrics_margin_var,
                                         chk_text_box=self.chk_text_box,
                                         text_box_opacity_var=self.text_box_opacity_var,
@@ -263,7 +265,7 @@ class VisualizerApp(ctk.CTk):
                     self.chk_glow, self.chk_barra,
                     self.spot_enabled, self.spot_type, self.spot_text,
                     self.spot_subtext, self.spot_duration, self.formato_var,
-                    self.lyrics_margin_var,
+                    self.lyrics_margin_var, self.lyrics_align_var,
                     self.chk_text_box, self.text_box_opacity_var,
                     self.text_box_radius_var, self.chk_dim_bg,
                     *self.platform_vars.values()]:
@@ -417,6 +419,28 @@ class VisualizerApp(ctk.CTk):
             "text_box_opacity": self.text_box_opacity_var.get(),
             "text_box_radius": self.text_box_radius_var.get(),
         }
+
+    def _kinetic_align_x(self, text_w, ancho):
+        """Retorna (cx, anchor_h) según la alineación horizontal configurada.
+
+        cx     — coordenada X del punto de referencia del texto
+        anchor — prefijo PIL: 'l' izquierda, 'm' centro, 'r' derecha
+        """
+        align = getattr(self, 'lyrics_align_var', None)
+        align = align.get() if align else "Centro"
+        margin = self.lyrics_margin_var.get()
+        if align == "Izquierda":
+            cx = margin
+            anchor_h = "l"
+        elif align == "Derecha":
+            cx = ancho - margin
+            anchor_h = "r"
+        else:
+            cx = ancho // 2
+            anchor_h = "m"
+        # Clamp para que no se salga de pantalla
+        cx = max(margin, min(ancho - margin, cx))
+        return cx, anchor_h
 
     def _kinetic_base_y(self, total_h, alto):
         """Calcula el Y de inicio del bloque de texto kinetic según la posición configurada."""
@@ -668,6 +692,7 @@ class VisualizerApp(ctk.CTk):
                     alpha_mode=self.alpha_var.get(),
                     fondo_path=self.fondo_path.get(),
                     lyrics_pos=self.lyrics_pos_var.get(),
+                    lyrics_align=self.lyrics_align_var.get(),
                     lyrics_margin=self.lyrics_margin_var.get(),
                     lyrics_extra_y=self._lyrics_drag_offset,
                     effects=self._build_effects())
@@ -702,6 +727,7 @@ class VisualizerApp(ctk.CTk):
                 alpha_mode=self.alpha_var.get(),
                 fondo_path=self.fondo_path.get(),
                 lyrics_pos=self.lyrics_pos_var.get(),
+                lyrics_align=self.lyrics_align_var.get(),
                 lyrics_margin=self.lyrics_margin_var.get(),
                 lyrics_extra_y=self._lyrics_drag_offset,
                 effects=self._build_effects())
@@ -874,8 +900,9 @@ class VisualizerApp(ctk.CTk):
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
 
-        cx = ancho // 2
+        cx, anchor_h = self._kinetic_align_x(tw, ancho)
         cy = self._kinetic_base_y(font_size, alto)
+        anchor = anchor_h + "t"   # top baseline
 
         # Recuadro detrás del texto
         if effects and effects.get("text_box", False):
@@ -883,11 +910,13 @@ class VisualizerApp(ctk.CTk):
             opacity = int(effects.get("text_box_opacity", 70) * 2.55)
             radius = int(effects.get("text_box_radius", 8))
             pad_x, pad_y = 20, 12
-            x1 = cx - tw // 2 - pad_x
-            y1 = cy - pad_y
-            x2 = cx + tw // 2 + pad_x
-            y2 = cy + th + pad_y
-            _draw_text_box(img, x1, y1, x2, y2, opacity, radius)
+            if anchor_h == "l":
+                x1, x2 = cx - pad_x, cx + tw + pad_x
+            elif anchor_h == "r":
+                x1, x2 = cx - tw - pad_x, cx + pad_x
+            else:
+                x1, x2 = cx - tw // 2 - pad_x, cx + tw // 2 + pad_x
+            _draw_text_box(img, x1, cy - pad_y, x2, cy + th + pad_y, opacity, radius)
 
         # Glow
         if effects and effects.get("glow"):
@@ -895,7 +924,7 @@ class VisualizerApp(ctk.CTk):
                 glow_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
                 gd = ImageDraw.Draw(glow_layer)
                 gd.text((cx, cy), texto, fill=glow_color + "50",
-                        font=f, anchor="mt")
+                        font=f, anchor=anchor)
                 glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(radius=6))
                 img = Image.alpha_composite(img.convert("RGBA"),
                                             glow_layer).convert("RGBA")
@@ -903,7 +932,7 @@ class VisualizerApp(ctk.CTk):
             except Exception:
                 pass
 
-        draw.text((cx, cy), texto, fill=color_activo, font=f, anchor="mt")
+        draw.text((cx, cy), texto, fill=color_activo, font=f, anchor=anchor)
         return img
 
     def _draw_kinetic_oneword(self, img, palabras, t, ancho, alto,
@@ -1070,16 +1099,25 @@ class VisualizerApp(ctk.CTk):
             else:
                 f_used = fuente
 
+            cx, anchor_h = self._kinetic_align_x(tw, ancho)
+            anchor = anchor_h + "t"
+
             if use_box and texto_frase.strip():
-                x1 = ancho // 2 - tw // 2 - 18
-                img = _draw_text_box(img, x1, y - 6, x1 + tw + 36, y + th + 6,
+                pad_x = 18
+                if anchor_h == "l":
+                    x1, x2 = cx - pad_x, cx + tw + pad_x
+                elif anchor_h == "r":
+                    x1, x2 = cx - tw - pad_x, cx + pad_x
+                else:
+                    x1, x2 = cx - tw // 2 - pad_x, cx + tw // 2 + pad_x
+                img = _draw_text_box(img, x1, y - 6, x2, y + th + 6,
                                      (0, 0, 0), box_opacity, box_radius)
                 draw = ImageDraw.Draw(img)
 
             if real_fi != active_frase:
                 color = color_pasado if real_fi < active_frase else color_futuro
-                draw.text((ancho // 2, y), texto_frase, fill=color,
-                          font=f_used, anchor="mt")
+                draw.text((cx, y), texto_frase, fill=color,
+                          font=f_used, anchor=anchor)
             else:
                 total_w = 0
                 word_widths = []
@@ -1090,7 +1128,13 @@ class VisualizerApp(ctk.CTk):
                     total_w += ww
                 total_w += space_w * (len(frase) - 1)
 
-                x = (ancho - total_w) / 2
+                # Punto de inicio X según alineación
+                if anchor_h == "l":
+                    x = float(cx)
+                elif anchor_h == "r":
+                    x = float(cx - total_w)
+                else:
+                    x = (ancho - total_w) / 2
 
                 for wi, w in enumerate(frase):
                     if t >= w["inicio"] and t <= w["fin"]:
@@ -1174,9 +1218,18 @@ class VisualizerApp(ctk.CTk):
             else:
                 f_scaled = fuente
 
+            cx, anchor_h = self._kinetic_align_x(tw, ancho)
+            anchor = anchor_h + "t"
+
             if use_box and linea.strip():
-                x1 = ancho // 2 - tw // 2 - 18
-                img = _draw_text_box(img, x1, y - 6, x1 + tw + 36, y + th + 6,
+                pad_x = 18
+                if anchor_h == "l":
+                    x1, x2 = cx - pad_x, cx + tw + pad_x
+                elif anchor_h == "r":
+                    x1, x2 = cx - tw - pad_x, cx + pad_x
+                else:
+                    x1, x2 = cx - tw // 2 - pad_x, cx + tw // 2 + pad_x
+                img = _draw_text_box(img, x1, y - 6, x2, y + th + 6,
                                      (0, 0, 0), box_opacity, box_radius)
                 draw = ImageDraw.Draw(img)
 
@@ -1185,10 +1238,10 @@ class VisualizerApp(ctk.CTk):
                     for dy in [-2, -1, 0, 1, 2]:
                         if dx == 0 and dy == 0:
                             continue
-                        draw.text((ancho // 2 + dx, y + dy), linea,
-                                  fill=glow_color + "30", font=f_scaled, anchor="mt")
+                        draw.text((cx + dx, y + dy), linea,
+                                  fill=glow_color + "30", font=f_scaled, anchor=anchor)
 
-            draw.text((ancho // 2, y), linea, fill=color, font=f_scaled, anchor="mt")
+            draw.text((cx, y), linea, fill=color, font=f_scaled, anchor=anchor)
 
         return img
 
@@ -1373,6 +1426,7 @@ class VisualizerApp(ctk.CTk):
             "effects": self._build_effects(),
             # Posición letra
             "lyrics_pos": self.lyrics_pos_var.get(),
+            "lyrics_align": self.lyrics_align_var.get(),
             "lyrics_margin": self.lyrics_margin_var.get(),
             "lyrics_extra_y": self._lyrics_drag_offset,
         }
@@ -1626,6 +1680,7 @@ class VisualizerApp(ctk.CTk):
             self.fuente_var.set("Arial")
             self.formato_var.set("MP4")
             self.lyrics_pos_var.set("Centro")
+            self.lyrics_align_var.set("Centro")
             self.lyrics_margin_var.set(40)
             self.chk_particulas.set(True)
             self.chk_onda.set(True)

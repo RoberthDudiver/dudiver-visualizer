@@ -208,6 +208,7 @@ def get_project_config(app):
         "formato": app.formato_var.get(),
         # Posición letra
         "lyrics_pos": app.lyrics_pos_var.get(),
+        "lyrics_align": app.lyrics_align_var.get(),
         "lyrics_margin": app.lyrics_margin_var.get(),
         "lyrics_extra_y": app._lyrics_drag_offset,
         # Recuadro texto
@@ -290,6 +291,8 @@ def apply_project(app, config):
         # Posición letra
         if config.get("lyrics_pos"):
             app.lyrics_pos_var.set(config["lyrics_pos"])
+        if config.get("lyrics_align"):
+            app.lyrics_align_var.set(config["lyrics_align"])
         if "lyrics_margin" in config:
             app.lyrics_margin_var.set(int(config["lyrics_margin"]))
         if "lyrics_extra_y" in config:
