@@ -698,8 +698,9 @@ class VisualizerApp(ctk.CTk):
                     effects=self._build_effects())
 
             self.after(0, lambda: self._show_preview_image(img, ancho, alto))
-        except Exception:
-            pass
+        except Exception as _e:
+            import traceback
+            self.after(0, lambda: self._log(f"✗ Preview error: {_e}\n{traceback.format_exc()[:400]}"))
 
     def _preview_frame(self):
         lines = self._lyrics()
@@ -863,15 +864,24 @@ class VisualizerApp(ctk.CTk):
         """Solo la línea activa centrada, las demás invisibles."""
         from PIL import ImageFont, ImageDraw, ImageFilter
 
-        # Buscar línea activa
+        # Buscar línea activa — o la más cercana si estamos entre líneas
         activa = None
+        ultima = None
+        proxima = None
         for item in timing_lines:
             ini = item.get("inicio", 0)
             fin = item.get("fin", 0)
             if ini <= t <= fin:
                 activa = item
                 break
+            if fin < t:
+                ultima = item   # última línea que ya pasó
+            elif ini > t and proxima is None:
+                proxima = item  # primera línea que aún no llega
 
+        if not activa:
+            # Entre líneas: mostrar la última que pasó (o la próxima si no hubo ninguna)
+            activa = ultima or proxima
         if not activa:
             return img
 
@@ -916,7 +926,9 @@ class VisualizerApp(ctk.CTk):
                 x1, x2 = cx - tw - pad_x, cx + pad_x
             else:
                 x1, x2 = cx - tw // 2 - pad_x, cx + tw // 2 + pad_x
-            _draw_text_box(img, x1, cy - pad_y, x2, cy + th + pad_y, opacity, radius)
+            img = _draw_text_box(img, x1, cy - pad_y, x2, cy + th + pad_y,
+                                 (0, 0, 0), opacity, radius)
+            draw = ImageDraw.Draw(img)
 
         # Glow
         if effects and effects.get("glow"):
@@ -926,8 +938,9 @@ class VisualizerApp(ctk.CTk):
                 gd.text((cx, cy), texto, fill=glow_color + "50",
                         font=f, anchor=anchor)
                 glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(radius=6))
+                orig_mode = img.mode
                 img = Image.alpha_composite(img.convert("RGBA"),
-                                            glow_layer).convert("RGBA")
+                                            glow_layer).convert(orig_mode)
                 draw = ImageDraw.Draw(img)
             except Exception:
                 pass
