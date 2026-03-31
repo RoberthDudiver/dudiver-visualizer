@@ -162,8 +162,9 @@ def get_project_config(app):
                 pass
 
     # Whisper raw data (palabras individuales) para Kinetic mode
-    whisper_raw = None
-    if audio:
+    # Preferir datos en memoria (ya corregidos) sobre archivo en disco
+    whisper_raw = getattr(app, '_whisper_raw', None)
+    if not whisper_raw and audio:
         whisper_file = os.path.splitext(audio)[0] + "_timestamps.json"
         if os.path.isfile(whisper_file):
             try:
@@ -342,6 +343,16 @@ def apply_project(app, config):
         whisper_raw = config.get("whisper_raw")
         if whisper_raw:
             app._whisper_raw = whisper_raw
+            # Sincronizar _timestamps.json en disco con datos corregidos
+            # para que Sync Editor y renderer siempre lean datos correctos
+            audio = config.get("audio_path", "")
+            if audio and os.path.isfile(audio):
+                ts_path = os.path.splitext(audio)[0] + "_timestamps.json"
+                try:
+                    with open(ts_path, "w", encoding="utf-8") as f:
+                        json.dump(whisper_raw, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
     finally:
         app._loading_project = False
 

@@ -85,14 +85,18 @@ def alinear_letra_con_whisper(lineas_reales, palabras_whisper):
 
             w_idx = fin_idx + 1
         else:
+            # Sin más palabras Whisper — asignar timing estimado
             if lineas_con_tiempo:
                 ultimo = lineas_con_tiempo[-1]["fin"]
-                lineas_con_tiempo.append({
-                    "texto": linea,
-                    "inicio": ultimo + 0.3,
-                    "fin": ultimo + 2.5,
-                    "score": 0
-                })
+            else:
+                ultimo = 0.0
+            est_dur = 2.5
+            lineas_con_tiempo.append({
+                "texto": linea,
+                "inicio": ultimo + 0.3,
+                "fin": ultimo + 0.3 + est_dur,
+                "score": 0
+            })
 
     return lineas_con_tiempo
 

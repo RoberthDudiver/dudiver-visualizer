@@ -587,6 +587,17 @@ class VisualizerApp(ctk.CTk):
             # Ejecutar Whisper
             res = whisper_generar_timestamps(audio, modelo=modelo, idioma="es")
             n = len(res.get("palabras", []))
+            self._log(f"  Whisper detectó {n} palabras")
+            # Forzar letra real sobre timestamps de Whisper —
+            # Whisper puede transcribir "visa" en vez de "villa", etc.
+            from app.config import forzar_letra_sobre_timestamps
+            if lines and res.get("palabras"):
+                palabras_corregidas = forzar_letra_sobre_timestamps(
+                    lines, res["palabras"]
+                )
+                if palabras_corregidas:
+                    res["palabras"] = palabras_corregidas
+                    self._log(f"  Letra forzada: {len(palabras_corregidas)} palabras corregidas")
             # Alinear con la letra
             timing = alinear_letra_con_whisper(lines, res["palabras"])
             with self._data_lock:
@@ -1632,6 +1643,37 @@ class VisualizerApp(ctk.CTk):
         if not ts_path or not os.path.isfile(ts_path):
             messagebox.showwarning(t("app.warn"), t("app.no_ts_run_whisper"))
             return
+
+        # Aplicar corrección de letras al archivo ANTES de abrir el editor.
+        # Whisper puede transcribir mal ("visa" en vez de "villa") —
+        # forzamos el texto real del usuario sobre los timestamps.
+        lines = self._lyrics()
+        if lines:
+            try:
+                import json as _json
+                from app.config import forzar_letra_sobre_timestamps, alinear_letra_con_whisper
+                with open(ts_path, "r", encoding="utf-8") as f:
+                    ts_data = _json.load(f)
+                if isinstance(ts_data, dict) and ts_data.get("palabras"):
+                    palabras_corregidas = forzar_letra_sobre_timestamps(
+                        lines, ts_data["palabras"]
+                    )
+                    if palabras_corregidas:
+                        ts_data["palabras"] = palabras_corregidas
+                        # Reconstruir segmentos con texto real
+                        segmentos_corr = alinear_letra_con_whisper(
+                            lines, palabras_corregidas
+                        )
+                        if segmentos_corr:
+                            ts_data["segmentos"] = [
+                                {"texto": s["texto"], "inicio": s["inicio"],
+                                 "fin": s["fin"]}
+                                for s in segmentos_corr
+                            ]
+                        with open(ts_path, "w", encoding="utf-8") as f:
+                            _json.dump(ts_data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                self._log(f"⚠ Corrección para SyncEditor: {e}")
 
         def on_save(data):
             # Recargar timestamps en la app

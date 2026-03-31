@@ -432,6 +432,17 @@ class VideoGenerator:
                                 "fin": lw[-1]["fin"],
                             })
                             wi = len(palabras_forzadas)
+                        else:
+                            # Sin más palabras — asignar timing estimado
+                            # basado en el último segmento
+                            if segmentos_forzados:
+                                last_fin = segmentos_forzados[-1]["fin"]
+                                est_dur = 2.5  # duración estimada por línea
+                                segmentos_forzados.append({
+                                    "texto": line,
+                                    "inicio": last_fin + 0.2,
+                                    "fin": last_fin + 0.2 + est_dur,
+                                })
                     if segmentos_forzados:
                         raw_forzado["segmentos"] = segmentos_forzados
                         self.on_log(f"  Segmentos construidos: {len(segmentos_forzados)} líneas")
@@ -476,6 +487,16 @@ class VideoGenerator:
                                         "fin": lw[-1]["fin"],
                                     })
                                     wi = len(pw)
+                                else:
+                                    # Sin más palabras — timing estimado
+                                    if segmentos_f:
+                                        last_fin = segmentos_f[-1]["fin"]
+                                        est_dur = 2.5
+                                        segmentos_f.append({
+                                            "texto": line,
+                                            "inicio": last_fin + 0.2,
+                                            "fin": last_fin + 0.2 + est_dur,
+                                        })
                             if segmentos_f:
                                 data["segmentos"] = segmentos_f
                         ts_forced = os.path.join(tempfile.gettempdir(), "dvs_kinetic_ts.json")

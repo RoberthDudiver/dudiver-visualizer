@@ -408,19 +408,27 @@ class PreviewPanel(ctk.CTkFrame):
         self.time_label.configure(text="0:00")
 
     def show_range(self, dur_secs, audio_dur):
-        """Muestra el range slider y oculta el timeline normal."""
+        """Muestra el range slider y ajusta el rango a la duración seleccionada.
+
+        Siempre actualiza end al valor de duración elegido en el combo,
+        manteniendo start donde estaba (si es válido).
+        """
         audio_dur = max(audio_dur, 10)
         self._range_max = audio_dur
-        if self.end_var.get() <= 0 or self.end_var.get() > audio_dur:
-            self.end_var.set(min(dur_secs, audio_dur))
-        if self.start_var.get() >= self.end_var.get():
-            self.start_var.set(0)
+        # Siempre ajustar el fin al valor de duración seleccionado
+        start = self.start_var.get()
+        end = min(start + dur_secs, audio_dur)
+        # Si el rango queda inválido, resetear start
+        if end - start < 1:
+            start = max(0, end - dur_secs)
+        self.start_var.set(max(0, start))
+        self.end_var.set(end)
         self._tl_frame.pack_forget()
         self.range_frame.pack(fill="x", pady=(0, 2))
         self.after(50, self._draw_range)
 
     def hide_range(self):
-        """Oculta el range slider y muestra el timeline normal."""
+        """Oculta el range slider y muestra el timeline normal (Completo)."""
         self.start_var.set(0)
         self.end_var.set(0)
         self.range_frame.pack_forget()
