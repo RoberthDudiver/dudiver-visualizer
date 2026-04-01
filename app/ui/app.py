@@ -584,8 +584,17 @@ class VisualizerApp(ctk.CTk):
         self._log(f"Sincronizando letra... precisión={label} (modelo={modelo})")
         try:
             lines = self._lyrics()
-            # Ejecutar Whisper
-            res = whisper_generar_timestamps(audio, modelo=modelo, idioma="es")
+            # Demucs con "Alta" y "Máxima" (separa voces para mejor detección)
+            usar_demucs = label in ("Alta", "Máxima")
+            if usar_demucs:
+                self._set_status(f"\u27f3 Separando voces + transcribiendo...", 15)
+                self._log("  Separando voces con Demucs + Whisper (puede tardar 3-5 min)")
+            else:
+                self._set_status(f"\u27f3 Transcribiendo audio ({label})...", 15)
+            res = whisper_generar_timestamps(
+                audio, modelo=modelo, idioma="es",
+                on_log=self._log, usar_demucs=usar_demucs
+            )
             n = len(res.get("palabras", []))
             self._log(f"  Whisper detectó {n} palabras")
             # Forzar letra real sobre timestamps de Whisper —
@@ -610,8 +619,28 @@ class VisualizerApp(ctk.CTk):
                 import json
                 with open(ts_path, "w", encoding="utf-8") as f:
                     json.dump(res, f, ensure_ascii=False, indent=2)
-            self._log(f"\u2713 {n} palabras detectadas")
-            self._set_status(f"\u2713 Timestamps listos ({n} palabras)", 100)
+            # Calcular cobertura: qué % del audio tiene palabras detectadas
+            palabras_w = res.get("palabras", [])
+            if palabras_w:
+                audio_dur = getattr(self, '_dur', 0) or 0
+                if audio_dur <= 0:
+                    try:
+                        from moviepy import AudioFileClip
+                        ac = AudioFileClip(audio)
+                        audio_dur = ac.duration
+                        ac.close()
+                    except Exception:
+                        audio_dur = palabras_w[-1]["fin"] + 1
+                tiempo_cubierto = sum(p["fin"] - p["inicio"] for p in palabras_w)
+                cobertura = min(100, int(tiempo_cubierto / max(audio_dur, 1) * 100))
+                lineas_ok = sum(1 for t in timing if t.get("score", 0) > 0.3)
+                self._log(f"\u2713 {n} palabras | {lineas_ok}/{len(lines)} lineas | Cobertura: {cobertura}%")
+                if cobertura < 50:
+                    self._log(f"  \u26a0 Cobertura baja ({cobertura}%) — prueba con precisi\u00f3n M\u00e1xima")
+                self._set_status(f"\u2713 Timestamps listos ({cobertura}% cobertura)", 100)
+            else:
+                self._log(f"\u2713 {n} palabras detectadas")
+                self._set_status(f"\u2713 Timestamps listos ({n} palabras)", 100)
             # Auto-save al .dudi
             self._auto_save_project()
         except Exception as ex:
@@ -1681,7 +1710,8 @@ class VisualizerApp(ctk.CTk):
             self._lineas = load_existing(ts_path, lines)
             self._auto_preview()
 
-        SyncEditorWindow(self, audio, ts_path, on_save=on_save)
+        SyncEditorWindow(self, audio, ts_path, on_save=on_save,
+                         lyrics_lines=lines)
 
     def _open_help(self):
         HelpWindow(self)

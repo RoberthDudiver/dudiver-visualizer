@@ -21,7 +21,7 @@ from app.ui.components import SpinnerLabel
 class SyncEditorWindow(ctk.CTkToplevel):
     """Ventana de edición avanzada de timestamps."""
 
-    def __init__(self, parent, audio_path, ts_path, on_save=None):
+    def __init__(self, parent, audio_path, ts_path, on_save=None, lyrics_lines=None):
         super().__init__(parent)
         self.title(t("sync.title"))
         self.geometry("900x650")
@@ -38,6 +38,7 @@ class SyncEditorWindow(ctk.CTkToplevel):
         self._audio_path = audio_path
         self._ts_path = ts_path
         self._on_save = on_save
+        self._lyrics_lines = lyrics_lines or []  # Letra real del usuario
         self._palabras = []
         self._segmentos = []
         self._raw_data = None
@@ -470,8 +471,8 @@ class SyncEditorWindow(ctk.CTkToplevel):
             self.after(0, _done)
 
     def _sync_with_claude_code(self):
-        """Ejecuta Claude Code en terminal para mejorar timestamps."""
-        self._ai_log_msg("Ejecutando Claude Code...")
+        """Ejecuta Claude Code para ajustar timestamps inteligentemente."""
+        self._ai_log_msg("Preparando datos para Claude Code...")
 
         # Verificar que claude está disponible
         claude_cmd = self._find_claude_cmd()
@@ -482,35 +483,54 @@ class SyncEditorWindow(ctk.CTkToplevel):
 
         self._ai_log_msg(f"Usando: {claude_cmd}")
 
-        # Guardar timestamps actuales a un archivo temporal para que Claude lo lea
-        ts_json = self._build_current_json()
+        # PASO 1: La app hace el trabajo pesado (Demucs + Whisper + corrección)
+        self._ai_log_msg("Paso 1/2: Procesando audio (Demucs + Whisper)...")
+        try:
+            from app.scripts.generar_timestamps import generar_timestamps
+            from app.scripts.lyric_video import forzar_letra_sobre_timestamps, alinear_letra_con_whisper
+
+            res = generar_timestamps(
+                self._audio_path, modelo="small", idioma="es",
+                on_log=self._ai_log_msg, usar_demucs=True
+            )
+            self._ai_log_msg(f"  Whisper detectó {len(res.get('palabras', []))} palabras")
+
+            # Corregir con letra real
+            lines = [l for l in self._lyrics_lines if l.strip()]
+            if lines and res.get("palabras"):
+                palabras_corr = forzar_letra_sobre_timestamps(lines, res["palabras"])
+                if palabras_corr:
+                    res["palabras"] = palabras_corr
+                    segs = alinear_letra_con_whisper(lines, palabras_corr)
+                    res["segmentos"] = [
+                        {"texto": s["texto"], "inicio": s["inicio"], "fin": s["fin"]}
+                        for s in segs
+                    ]
+                    self._ai_log_msg(f"  Corregido: {len(palabras_corr)} palabras, {len(segs)} segmentos")
+        except Exception as e:
+            self._ai_log_msg(f"  Error procesando: {e}")
+            res = self._build_current_json()
+
+        # Guardar resultado procesado para Claude
         ts_temp = os.path.join(os.path.dirname(self._audio_path), "_sync_temp.json")
         with open(ts_temp, "w", encoding="utf-8") as f:
-            json.dump(ts_json, f, ensure_ascii=False, indent=2)
+            json.dump(res, f, ensure_ascii=False, indent=2)
 
         prompt_extra = self._prompt_text.get("1.0", "end").strip()
+        letra_text = "\n".join(self._lyrics_lines) if self._lyrics_lines else ""
 
-        # Prompt detallado que le dice exactamente qué hacer
+        # PASO 2: Claude Code solo ajusta tiempos (prompt corto y directo)
+        self._ai_log_msg("Paso 2/2: Claude Code ajustando tiempos...")
         prompt = (
-            f"TAREA: Mejorar la sincronización de timestamps de una canción.\n\n"
-            f"ARCHIVOS:\n"
-            f"- Audio: {self._audio_path}\n"
-            f"- Timestamps actuales: {ts_temp}\n\n"
-            f"INSTRUCCIONES:\n"
-            f"1. Lee el archivo de timestamps con Read tool\n"
-            f"2. Usa Whisper para re-analizar el audio y obtener timestamps precisos "
-            f"palabra por palabra. Ejecuta este código Python:\n"
-            f"   import whisper; model = whisper.load_model('base'); "
-            f"result = model.transcribe(r'{self._audio_path}', language='es', "
-            f"word_timestamps=True)\n"
-            f"3. Compara los timestamps de Whisper con los existentes\n"
-            f"4. Genera un JSON corregido con el formato exacto:\n"
-            f'   {{"palabras": [{{"palabra": "texto", "inicio": 0.0, "fin": 0.5}}, ...], '
-            f'"segmentos": [...]}}\n'
-            f"5. Escribe el resultado en: {ts_temp}\n\n"
-            f"CONTEXTO ADICIONAL DEL USUARIO:\n{prompt_extra}\n\n"
-            f"IMPORTANTE: Escribe el JSON corregido directamente en {ts_temp}. "
-            f"No pidas confirmación, solo hazlo."
+            f"Lee {ts_temp} y ajusta los timestamps. "
+            f"La letra real es:\n{letra_text}\n\n"
+            f"Reglas: 1) No cambies el texto, solo ajusta inicio/fin de cada segmento. "
+            f"2) Los segmentos no deben superponerse. "
+            f"3) Segmentos muy cortos (<1s) deben extenderse a 2s mínimo. "
+            f"4) Gaps >15s entre segmentos: redistribuye los segmentos cercanos. "
+            f"5) Nada puede pasar de 159.7s (duración del audio). "
+            f"{prompt_extra}\n"
+            f"Escribe el JSON corregido en {ts_temp}. Solo hazlo, sin preguntar."
         )
 
         self._ai_log_msg("Enviando prompt con instrucciones completas...")
@@ -672,15 +692,34 @@ class SyncEditorWindow(ctk.CTkToplevel):
         self._parse_ai_response(output)
 
     def _sync_with_whisper(self):
-        """Re-ejecuta Whisper para regenerar timestamps."""
+        """Re-ejecuta Demucs + Whisper para regenerar timestamps."""
         if not self._audio_path or not os.path.isfile(self._audio_path):
             self._ai_log_msg("ERROR: No hay audio.")
             return
 
-        self._ai_log_msg("Re-ejecutando Whisper...")
+        self._ai_log_msg("Re-ejecutando Demucs + Whisper...")
 
         from app.config import whisper_generar_timestamps
-        res = whisper_generar_timestamps(self._audio_path, modelo="base", idioma="es")
+        res = whisper_generar_timestamps(
+            self._audio_path, modelo="small", idioma="es",
+            on_log=self._ai_log_msg, usar_demucs=True
+        )
+
+        # Aplicar corrección de letra real
+        if "palabras" in res and self._lyrics_lines:
+            from app.config import forzar_letra_sobre_timestamps
+            from app.scripts.lyric_video import alinear_letra_con_whisper
+            lines = [l for l in self._lyrics_lines if l.strip()]
+            palabras_corr = forzar_letra_sobre_timestamps(lines, res["palabras"])
+            if palabras_corr:
+                res["palabras"] = palabras_corr
+                segmentos_corr = alinear_letra_con_whisper(lines, palabras_corr)
+                if segmentos_corr:
+                    res["segmentos"] = [
+                        {"texto": s["texto"], "inicio": s["inicio"], "fin": s["fin"]}
+                        for s in segmentos_corr
+                    ]
+                self._ai_log_msg(f"Letra corregida: {len(palabras_corr)} palabras")
 
         if "palabras" in res:
             self._palabras = res["palabras"]

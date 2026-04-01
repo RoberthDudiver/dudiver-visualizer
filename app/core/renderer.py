@@ -53,7 +53,8 @@ def _extract_video_frame(video_path, t, ancho, alto):
 def render_preview_frame(*, ancho, alto, timing, t, dur, titulo,
                          fuente, fuente_titulo, fuente_peq,
                          esquema_key, alpha_mode, fondo_path,
-                         lyrics_pos="Centro", lyrics_margin=40, lyrics_extra_y=0,
+                         lyrics_pos="Centro", lyrics_align="Centro",
+                         lyrics_margin=40, lyrics_extra_y=0,
                          effects=None):
     """Renderiza un solo frame de preview y retorna un PIL Image (RGB)."""
     esquema_name = ESQUEMAS_GUI.get(esquema_key, "nocturno")
@@ -79,7 +80,8 @@ def render_preview_frame(*, ancho, alto, timing, t, dur, titulo,
     if alpha_mode:
         img = crear_frame_alpha(ancho, alto, timing, t, dur,
                                 beat_times, fuente, fuente_titulo, titulo,
-                                lyrics_pos=lyrics_pos, lyrics_margin=lyrics_margin,
+                                lyrics_pos=lyrics_pos, lyrics_align=lyrics_align,
+                                lyrics_margin=lyrics_margin,
                                 lyrics_extra_y=lyrics_extra_y, effects=effects)
         base = bg_image.convert("RGBA") if bg_image else Image.new("RGBA", (ancho, alto), (20, 20, 40, 255))
         img = Image.alpha_composite(base, img).convert("RGB")
@@ -88,7 +90,8 @@ def render_preview_frame(*, ancho, alto, timing, t, dur, titulo,
         img = crear_frame_normal(ancho, alto, timing, t, dur,
                                  beat_times, rms_data, esquema, fuente,
                                  fuente_titulo, fuente_peq, parts, titulo, bg_image,
-                                 lyrics_pos=lyrics_pos, lyrics_margin=lyrics_margin,
+                                 lyrics_pos=lyrics_pos, lyrics_align=lyrics_align,
+                                 lyrics_margin=lyrics_margin,
                                  lyrics_extra_y=lyrics_extra_y, effects=effects)
 
     # Ensure PIL Image

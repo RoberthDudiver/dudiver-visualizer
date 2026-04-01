@@ -42,11 +42,26 @@ def similitud(a, b):
     return comunes / max(len(a), len(b), 1)
 
 
-def alinear_letra_con_whisper(lineas_reales, palabras_whisper):
+def alinear_letra_con_whisper(lineas_reales, palabras_whisper, audio_dur=0):
     """
     Alinea cada línea de la letra real con timestamps de Whisper
     usando matching fuzzy palabra por palabra.
+
+    Robusto ante cobertura parcial de Whisper: cuando hay gaps grandes
+    redistribuye las líneas sin match de forma uniforme.
     """
+    if not lineas_reales:
+        return []
+    if not palabras_whisper:
+        # Sin datos de Whisper — distribuir uniformemente
+        dur = max(audio_dur, len(lineas_reales) * 3)
+        dur_line = dur / len(lineas_reales)
+        return [
+            {"texto": l, "inicio": round(i * dur_line, 3),
+             "fin": round((i + 1) * dur_line - 0.1, 3), "score": 0}
+            for i, l in enumerate(lineas_reales)
+        ]
+
     lineas_con_tiempo = []
     w_idx = 0
 
@@ -97,6 +112,106 @@ def alinear_letra_con_whisper(lineas_reales, palabras_whisper):
                 "fin": ultimo + 0.3 + est_dur,
                 "score": 0
             })
+
+    # ── Post-proceso: arreglar overlaps, límites y redistribuir ──────────
+    if len(lineas_con_tiempo) > 1:
+        # 1. Corregir overlaps iniciales
+        for i in range(1, len(lineas_con_tiempo)):
+            prev = lineas_con_tiempo[i - 1]
+            curr = lineas_con_tiempo[i]
+            if curr["inicio"] < prev["fin"]:
+                mid = (prev["fin"] + curr["inicio"]) / 2
+                prev["fin"] = round(mid - 0.05, 3)
+                curr["inicio"] = round(mid + 0.05, 3)
+
+        # 2. Corregir segmentos demasiado largos
+        for seg in lineas_con_tiempo:
+            n_words = len(seg["texto"].split())
+            max_dur = max(n_words * 1.0, 4.0)
+            if seg["fin"] - seg["inicio"] > max_dur:
+                seg["fin"] = round(seg["inicio"] + max_dur, 3)
+
+        # 3. Redistribuir segmentos que caen fuera del audio
+        #    o que están apilados (score=0 con duración < 1s).
+        #    Los colocamos en los GAPS más grandes entre segmentos con buen score.
+        if audio_dur > 0:
+            max_t = audio_dur
+        else:
+            max_t = max(s["fin"] for s in lineas_con_tiempo) + 1
+
+        # Separar: anclados (score > 0) y flotantes (score=0 o fuera del audio)
+        anclados = []
+        flotantes = []
+        for seg in lineas_con_tiempo:
+            if seg.get("score", 0) > 0.3 and seg["inicio"] < max_t:
+                anclados.append(seg)
+            else:
+                flotantes.append(seg)
+
+        if flotantes and anclados:
+            # Encontrar gaps entre anclados (y al inicio/final)
+            gaps = []
+            # Gap antes del primer anclado
+            if anclados[0]["inicio"] > 2:
+                gaps.append((0, anclados[0]["inicio"]))
+            # Gaps entre anclados
+            for i in range(1, len(anclados)):
+                g_start = anclados[i - 1]["fin"]
+                g_end = anclados[i]["inicio"]
+                if g_end - g_start > 2:
+                    gaps.append((g_start, g_end))
+            # Gap después del último anclado
+            if max_t - anclados[-1]["fin"] > 2:
+                gaps.append((anclados[-1]["fin"], max_t))
+
+            # Ordenar gaps por tamaño (más grande primero)
+            gaps.sort(key=lambda g: g[1] - g[0], reverse=True)
+
+            # Distribuir flotantes en los gaps
+            fi = 0
+            for g_start, g_end in gaps:
+                if fi >= len(flotantes):
+                    break
+                g_dur = g_end - g_start
+                # Cuántos flotantes caben en este gap (~2.5s por línea + 0.2 pausa)
+                can_fit = max(1, int(g_dur / 2.7))
+                batch = flotantes[fi:fi + can_fit]
+                slot = min(2.5, (g_dur - 0.2 * len(batch)) / max(len(batch), 1))
+                t = g_start + 0.3
+                for seg in batch:
+                    seg["inicio"] = round(t, 3)
+                    seg["fin"] = round(min(t + slot, g_end - 0.1), 3)
+                    t = seg["fin"] + 0.2
+                fi += len(batch)
+
+            # Si quedan flotantes sin asignar, ponerlos al final
+            if fi < len(flotantes):
+                t = anclados[-1]["fin"] + 0.3
+                for seg in flotantes[fi:]:
+                    seg["inicio"] = round(t, 3)
+                    seg["fin"] = round(min(t + 2.5, max_t - 0.1), 3)
+                    t = seg["fin"] + 0.2
+
+            # Recombinar y ordenar por inicio
+            lineas_con_tiempo = sorted(
+                anclados + flotantes, key=lambda s: s["inicio"])
+
+        # 4. Clamp final: nada pasa de audio_dur
+        if audio_dur > 0:
+            for seg in lineas_con_tiempo:
+                if seg["fin"] > audio_dur:
+                    seg["fin"] = round(audio_dur - 0.05, 3)
+                if seg["inicio"] >= seg["fin"]:
+                    seg["inicio"] = round(max(seg["fin"] - 2.0, 0), 3)
+
+        # 5. Asegurar no-overlap final
+        for i in range(1, len(lineas_con_tiempo)):
+            prev = lineas_con_tiempo[i - 1]
+            curr = lineas_con_tiempo[i]
+            if curr["inicio"] < prev["fin"]:
+                curr["inicio"] = round(prev["fin"] + 0.1, 3)
+            if curr["fin"] <= curr["inicio"]:
+                curr["fin"] = round(curr["inicio"] + 1.0, 3)
 
     return lineas_con_tiempo
 
@@ -333,9 +448,20 @@ def _calc_base_y(alto, total_h, lyrics_pos="Centro", lyrics_margin=40, lyrics_ex
     return base_y
 
 
+def _calc_x(ancho, tw, lyrics_align, margin=40):
+    """Calcula la posición X del texto según la alineación horizontal."""
+    if lyrics_align == "Izquierda":
+        return margin
+    elif lyrics_align == "Derecha":
+        return ancho - tw - margin
+    else:  # Centro
+        return (ancho - tw) // 2
+
+
 def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_total,
                       beat_times, fuente, fuente_titulo, titulo="",
-                      lyrics_pos="Centro", lyrics_margin=40, lyrics_extra_y=0,
+                      lyrics_pos="Centro", lyrics_align="Centro",
+                      lyrics_margin=40, lyrics_extra_y=0,
                       effects=None):
     """
     Crea un frame con fondo 100% TRANSPARENTE (RGBA).
@@ -406,7 +532,7 @@ def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_to
 
         bbox = draw.textbbox((0, 0), texto, font=fuente)
         tw = bbox[2] - bbox[0]
-        x = (ancho - tw) // 2
+        x = _calc_x(ancho, tw, lyrics_align)
 
         # Recuadro detrás del texto (alpha mode — fondo oscuro)
         if use_text_box_a and texto.strip():
@@ -482,7 +608,8 @@ def crear_frame_alpha(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_to
 def crear_frame_normal(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_total,
                        beat_times, rms_data, esquema, fuente, fuente_titulo, fuente_peq,
                        particulas, titulo="", bg_image=None, solo_fondo=False, effects=None,
-                       lyrics_pos="Centro", lyrics_margin=40, lyrics_extra_y=0):
+                       lyrics_pos="Centro", lyrics_align="Centro",
+                       lyrics_margin=40, lyrics_extra_y=0):
     """Crea un frame con efectos visuales completos (modo normal con fondo)"""
 
     # Calcular beat intensity
@@ -597,7 +724,7 @@ def crear_frame_normal(ancho, alto, lineas_con_tiempo, tiempo_actual, duracion_t
 
         bbox = draw.textbbox((0, 0), texto, font=fuente)
         tw = bbox[2] - bbox[0]
-        x = (ancho - tw) // 2
+        x = _calc_x(ancho, tw, lyrics_align)
 
         # Recuadro detrás del texto
         if use_text_box and texto.strip():
