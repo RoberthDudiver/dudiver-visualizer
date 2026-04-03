@@ -1387,32 +1387,43 @@ class VisualizerApp(ctk.CTk):
 
     def _run_generate(self):
         audio = self.audio_path.get()
-        if not audio or not os.path.isfile(audio):
-            messagebox.showwarning(t("app.warn"), t("app.select_audio_short"))
-            return
+        has_audio = audio and os.path.isfile(audio)
         lines = self._lyrics()
-        if not lines:
-            messagebox.showwarning(t("app.warn"), t("app.add_lyrics"))
+        has_spot = self.spot_enabled.get()
+
+        # Necesita al menos audio O spot para generar algo
+        if not has_audio and not has_spot:
+            messagebox.showwarning(t("app.warn"),
+                                   "Selecciona un audio o activa el Spot/QR para generar.")
             return
 
-        # Advertir si no hay timestamps procesados
-        has_timing = False
-        with self._data_lock:
-            has_timing = bool(self._lineas and len(self._lineas) > 0)
-        if not has_timing:
-            ts_path = get_ts_path(audio)
-            has_timing = bool(ts_path and os.path.isfile(ts_path))
-        if not has_timing:
-            resp = messagebox.askyesno(
-                "⚠️ Sin timestamps de letra",
-                "No se han procesado los timestamps con IA (botón Timestamps).\n\n"
-                "Si continúas, se generará el video con fondo musical e imagen/video,\n"
-                "pero SIN letra sincronizada.\n\n"
-                "¿Deseas continuar de todas formas?",
-                icon="warning"
-            )
-            if not resp:
+        # Si no hay letra, avisar pero permitir continuar
+        if not lines:
+            msg = ("No hay letra agregada.\n\n"
+                   "Se generará el video solo con fondo musical"
+                   + (" y Spot/QR al final." if has_spot else ".")
+                   + "\n\n¿Deseas continuar?")
+            if not messagebox.askyesno("Sin letra", msg, icon="info"):
                 return
+        elif lines:
+            # Advertir si hay letra pero no hay timestamps procesados
+            has_timing = False
+            with self._data_lock:
+                has_timing = bool(self._lineas and len(self._lineas) > 0)
+            if not has_timing:
+                ts_path = get_ts_path(audio) if has_audio else None
+                has_timing = bool(ts_path and os.path.isfile(ts_path))
+            if not has_timing:
+                resp = messagebox.askyesno(
+                    "⚠️ Sin timestamps de letra",
+                    "No se han procesado los timestamps con IA (botón Timestamps).\n\n"
+                    "Si continúas, se generará el video con fondo musical e imagen/video,\n"
+                    "pero SIN letra sincronizada.\n\n"
+                    "¿Deseas continuar de todas formas?",
+                    icon="warning"
+                )
+                if not resp:
+                    return
 
         if self._worker and self._worker.is_alive():
             return
@@ -1445,7 +1456,7 @@ class VisualizerApp(ctk.CTk):
         ancho, alto = self._resolution()
 
         # Pre-cargar timing si ya existe (evita Whisper en subprocess)
-        timing = self._ensure_timing(lines)
+        timing = self._ensure_timing(lines) if lines else []
 
         # Resolver estilo kinetic
         estilo_k = ESTILOS_KINETIC.get(self.estilo_kinetic_var.get(), "wave")
