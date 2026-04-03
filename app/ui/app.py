@@ -490,23 +490,30 @@ class VisualizerApp(ctk.CTk):
         p = self.audio_path.get()
         if p and os.path.isfile(p):
             self.preview_panel.info_label.configure(text=f"\U0001f3b5 {short_path(p, 50)}")
-            # Auto-cargar proyecto .dudi si existe en la carpeta del audio
-            # (se omite si venimos de "Nuevo proyecto" para no restaurar el anterior)
-            folder = os.path.dirname(p)
-            dudi = find_dudi(folder)
+            # Auto-cargar proyecto .dudi SOLO si corresponde al mismo audio
+            # (se omite si venimos de "Nuevo proyecto")
             new_project_mode = getattr(self, '_new_project_mode', False)
             if new_project_mode:
-                # Consumir el flag — ya no bloquear en carga siguiente
                 self._new_project_mode = False
-            if dudi and not new_project_mode:
-                try:
-                    config = load_dudi(dudi)
-                    self._dudi_path = dudi
-                    apply_project(self, config)
-                    name = os.path.splitext(os.path.basename(dudi))[0]
-                    self._log(f"Proyecto cargado: {name}")
-                except Exception:
-                    pass
+            if not new_project_mode:
+                folder = os.path.dirname(p)
+                dudi = find_dudi(folder)
+                if dudi:
+                    try:
+                        config = load_dudi(dudi)
+                        # Solo cargar si el audio del proyecto es el mismo
+                        proj_audio = config.get("audio_path", "")
+                        same_audio = (
+                            proj_audio and
+                            os.path.basename(proj_audio).lower() == os.path.basename(p).lower()
+                        )
+                        if same_audio:
+                            self._dudi_path = dudi
+                            apply_project(self, config)
+                            name = os.path.splitext(os.path.basename(dudi))[0]
+                            self._log(f"Proyecto cargado: {name}")
+                    except Exception:
+                        pass
             elif not self.titulo_var.get().strip():
                 name = os.path.splitext(os.path.basename(p))[0]
                 name = re.sub(r'\s*\((?:Remastered|Master|Final|Mix|v\d+)\)', '', name, flags=re.IGNORECASE)
