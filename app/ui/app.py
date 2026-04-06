@@ -29,6 +29,7 @@ from app.ui.panels.files_panel import FilesPanel
 from app.ui.panels.config_panel import ConfigPanel
 from app.ui.panels.spot_panel import SpotPanel
 from app.ui.panels.preview_panel import PreviewPanel
+from app.ui.panels.mastering_panel import MasteringPanel
 from app.ui.components import short_path
 from app.ui.about import AboutWindow
 from app.ui.settings import SettingsWindow
@@ -171,15 +172,22 @@ class VisualizerApp(ctk.CTk):
                                on_save_project=self._save_project,
                                on_open_project=self._open_project,
                                on_new_project=self._new_project,
+                               on_mode_change=self._on_mode_change,
                                all_inputs=self._all_inputs)
         self.toolbar.pack(fill="x")
 
         # Accent line
         ctk.CTkFrame(self, fg_color=ACCENT, height=2, corner_radius=0).pack(fill="x")
 
+        # ── Container que contiene visualizer body y mastering view ──
+        self._mode = "visualizer"
+        self.view_container = ctk.CTkFrame(self, fg_color=DARK, corner_radius=0)
+        self.view_container.pack(fill="both", expand=True)
+
         # ── Body: 3 columnas ──
-        body = ctk.CTkFrame(self, fg_color=DARK, corner_radius=0)
+        body = ctk.CTkFrame(self.view_container, fg_color=DARK, corner_radius=0)
         body.pack(fill="both", expand=True, padx=12, pady=8)
+        self._visualizer_body = body
         body.rowconfigure(0, weight=1)
         body.columnconfigure(0, weight=3, minsize=280)
         body.columnconfigure(1, weight=3, minsize=300)
@@ -258,6 +266,11 @@ class VisualizerApp(ctk.CTk):
                                           on_time_change=self._on_time_change,
                                           on_lyrics_drag=self._on_lyrics_drag)
         self.preview_panel.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+
+        # ── Mastering view (oculto por defecto) ──
+        self.mastering_panel = MasteringPanel(
+            self.view_container, log_cb=self._log, status_cb=self._set_status)
+        # No se hace pack hasta switch a modo mastering
 
         # Watchers — auto-preview + auto-save al cambiar configuración
         self.audio_path.trace_add("write", self._on_audio_change)
@@ -407,6 +420,27 @@ class VisualizerApp(ctk.CTk):
                     pass
             self.toolbar.set_idle()
         self.after(0, _e)
+
+    # ── Mode switching ──────────────────────────────────────────────────────
+
+    def _on_mode_change(self, mode: str):
+        if mode == self._mode:
+            return
+        self._mode = mode
+        if mode == "mastering":
+            try:
+                self._visualizer_body.pack_forget()
+            except Exception:
+                pass
+            self.mastering_panel.pack(fill="both", expand=True, padx=12, pady=8)
+            self._log("[Modo] Dudiver Master")
+        else:
+            try:
+                self.mastering_panel.pack_forget()
+            except Exception:
+                pass
+            self._visualizer_body.pack(fill="both", expand=True, padx=12, pady=8)
+            self._log("[Modo] Visualizer")
 
     # ── Events ──────────────────────────────────────────────────────────────
 

@@ -14,10 +14,12 @@ class Toolbar(ctk.CTkFrame):
                  on_sync_editor=None, on_help=None,
                  on_save_project=None, on_open_project=None,
                  on_new_project=None,
+                 on_mode_change=None,
                  all_inputs):
         super().__init__(parent, fg_color=DARK, height=56, corner_radius=0)
         self.pack_propagate(False)
         self._anim_active = False
+        self._visu_only_widgets = []  # widgets que solo aplican a Visualizer
 
         # Logo icon al lado del nombre
         from app.utils.paths import asset_path
@@ -28,8 +30,31 @@ class Toolbar(ctk.CTkFrame):
 
         ctk.CTkLabel(self, text="DUDIVER", font=("Segoe UI Black", 20),
                      text_color=ACCENT).pack(side="left", padx=(4, 0))
-        ctk.CTkLabel(self, text="VISUALIZER", font=("Segoe UI Light", 20),
-                     text_color="white").pack(side="left", padx=(6, 0))
+        self.brand_lbl = ctk.CTkLabel(self, text="VISUALIZER", font=("Segoe UI Light", 20),
+                                      text_color="white")
+        self.brand_lbl.pack(side="left", padx=(6, 0))
+
+        # Separator
+        ctk.CTkFrame(self, fg_color="#2a2a4a", width=2, height=30,
+                     corner_radius=0).pack(side="left", padx=12)
+
+        # ── Mode selector ──
+        self._on_mode_change = on_mode_change
+        self._mode = "visualizer"
+        self.mode_visu_btn = ctk.CTkButton(
+            self, text="\U0001f3ac  Visualizer", height=34, width=130,
+            font=("Segoe UI Semibold", 11),
+            fg_color=ACCENT, hover_color=ACCENT_H,
+            corner_radius=8, command=lambda: self._switch_mode("visualizer"))
+        self.mode_visu_btn.pack(side="left", padx=(0, 3))
+
+        self.mode_master_btn = ctk.CTkButton(
+            self, text="\U0001f39a  Dudiver Master", height=34, width=150,
+            font=("Segoe UI Semibold", 11),
+            fg_color="#2a2a4a", hover_color="#3a3a5a",
+            text_color=GOLD, corner_radius=8,
+            command=lambda: self._switch_mode("mastering"))
+        self.mode_master_btn.pack(side="left", padx=3)
 
         # Separator
         ctk.CTkFrame(self, fg_color="#2a2a4a", width=2, height=30,
@@ -42,6 +67,7 @@ class Toolbar(ctk.CTkFrame):
                                corner_radius=8, command=on_timestamps)
         ts_btn.pack(side="left", padx=3)
         all_inputs.append(ts_btn)
+        self._visu_only_widgets.append(ts_btn)
 
         if on_sync_editor:
             sync_btn = ctk.CTkButton(self, text=t("toolbar.sync"), height=34, width=80,
@@ -51,6 +77,7 @@ class Toolbar(ctk.CTkFrame):
                                      command=on_sync_editor)
             sync_btn.pack(side="left", padx=3)
             all_inputs.append(sync_btn)
+            self._visu_only_widgets.append(sync_btn)
 
         pv_btn = ctk.CTkButton(self, text=t("toolbar.preview"), height=34, width=110,
                                font=("Segoe UI Semibold", 11),
@@ -59,6 +86,7 @@ class Toolbar(ctk.CTkFrame):
                                command=on_preview)
         pv_btn.pack(side="left", padx=3)
         all_inputs.append(pv_btn)
+        self._visu_only_widgets.append(pv_btn)
 
         # GENERAR button
         self.gen_btn = ctk.CTkButton(self, text=t("toolbar.generate"), height=38, width=200,
@@ -67,6 +95,7 @@ class Toolbar(ctk.CTkFrame):
                                      corner_radius=10, command=on_generate)
         self.gen_btn.pack(side="left", padx=(8, 3))
         all_inputs.append(self.gen_btn)
+        self._visu_only_widgets.append(self.gen_btn)
 
         self.cancel_btn = ctk.CTkButton(self, text="\u2715", height=34, width=40,
                                         font=("Segoe UI Bold", 13),
@@ -74,6 +103,7 @@ class Toolbar(ctk.CTkFrame):
                                         text_color=DIM, corner_radius=8,
                                         state="disabled", command=on_cancel)
         self.cancel_btn.pack(side="left", padx=3)
+        self._visu_only_widgets.append(self.cancel_btn)
 
         # Separator
         ctk.CTkFrame(self, fg_color="#2a2a4a", width=2, height=30,
@@ -186,6 +216,41 @@ class Toolbar(ctk.CTkFrame):
             self._anim_dir = 1
         self.progress_bar.set(self._anim_pos)
         self.after(30, self._animate_progress)
+
+    def _switch_mode(self, mode: str):
+        if mode == self._mode:
+            return
+        self._mode = mode
+        if mode == "visualizer":
+            self.mode_visu_btn.configure(fg_color=ACCENT, hover_color=ACCENT_H,
+                                         text_color="white")
+            self.mode_master_btn.configure(fg_color="#2a2a4a", hover_color="#3a3a5a",
+                                           text_color=GOLD)
+            try:
+                self.brand_lbl.configure(text="VISUALIZER")
+            except Exception:
+                pass
+            for w in self._visu_only_widgets:
+                try:
+                    w.configure(state="normal")
+                except Exception:
+                    pass
+        else:  # mastering
+            self.mode_master_btn.configure(fg_color=GOLD, hover_color="#ffe080",
+                                           text_color=DARK)
+            self.mode_visu_btn.configure(fg_color="#2a2a4a", hover_color="#3a3a5a",
+                                         text_color="white")
+            try:
+                self.brand_lbl.configure(text="MASTER")
+            except Exception:
+                pass
+            for w in self._visu_only_widgets:
+                try:
+                    w.configure(state="disabled")
+                except Exception:
+                    pass
+        if self._on_mode_change:
+            self._on_mode_change(mode)
 
     def set_idle(self):
         """Restaura boton generar, desactiva cancel, para animación."""
